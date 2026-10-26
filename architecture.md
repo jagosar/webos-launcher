@@ -165,7 +165,7 @@ export interface PlatformApi { platformBack(): void; }
 }
 ```
 
-`launcher/public/appinfo.json` (WP-01): the v1 file plus `"bgColor": "#000000"` and `"disableBackHistoryAPI": true` (so Back reaches the page as keyCode 461 and `platformBack` decides). `version` → `"0.2.0"` (`package.json` stays `0.1.0` on purpose: it is frozen tooling and its version is not shipped).
+`launcher/public/appinfo.json` (WP-01): the v1 file plus `"bgColor": "#000000"` and `"disableBackHistoryAPI": true` (so Back reaches the page as keyCode 461 and `platformBack` decides). `version` → `"2.0.0"` (this design is release 2.0; `package.json` and its lockfile carry the same `2.0.0`).
 
 ## 6. Contracts between modules
 Relative imports without extension, as in v1.
@@ -377,7 +377,7 @@ Design 0001's **AC-003, AC-004 and AC-005 stay in force unchanged**, with their 
 - AC-019 · Build ships the assets and stays Chromium 53 compatible
   - Scenario: Node environment (`// @vitest-environment node`), temporary dir.
   - Action: `await buildLauncher(tmp)` (from `../scripts/build.mjs`).
-  - Expected: `index.html`, `main.js`, `style.css`, `appinfo.json`, `icon.png`, `largeIcon.png`, `assets/fonts/jost.woff2`, `assets/fonts/OFL.txt`, `assets/CREDITS.md` and `assets/backgrounds/<id>.jpg` for all 8 `BACKGROUND_IDS` exist; `appinfo.json` has `disableBackHistoryAPI: true`, `bgColor: "#000000"`, `version: "0.2.0"`, `id: "com.jagosar.minimal.launcher"`; `style.css` and `index.html` are byte-equal to `public/`; `main.js` parses with acorn `ecmaVersion: 2016, sourceType: "script"`, contains `Configuración inválida` and `api.open-meteo.com` (the real bundle, not a stub), and contains none of `padStart`, `Object.values`, `Object.entries`, `.includes(`, `fetch(`; `dist` has no `godrevy.jpg`.
+  - Expected: `index.html`, `main.js`, `style.css`, `appinfo.json`, `icon.png`, `largeIcon.png`, `assets/fonts/jost.woff2`, `assets/fonts/OFL.txt`, `assets/CREDITS.md` and `assets/backgrounds/<id>.jpg` for all 8 `BACKGROUND_IDS` exist; `appinfo.json` has `disableBackHistoryAPI: true`, `bgColor: "#000000"`, `version: "2.0.0"`, `id: "com.jagosar.minimal.launcher"`; `style.css` and `index.html` are byte-equal to `public/`; `main.js` parses with acorn `ecmaVersion: 2016, sourceType: "script"`, contains `Configuración inválida` and `api.open-meteo.com` (the real bundle, not a stub), and contains none of `padStart`, `Object.values`, `Object.entries`, `.includes(`, `fetch(`; `dist` has no `godrevy.jpg`.
   - Must not: emit ES modules (`index.html` has no `type="module"`), or ship a background outside `BACKGROUND_IDS`.
   - Check: `launcher/acceptance/build2.test.ts`
   - WP: WP-01 (build script), WP-06 (bundle entry)

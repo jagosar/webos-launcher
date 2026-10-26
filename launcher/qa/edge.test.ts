@@ -601,7 +601,7 @@ describe("conventions and static review (architecture sections 4b, 7, 9)", () =>
     const info = JSON.parse(read(PUBLIC, "appinfo.json"));
     expect(info).toMatchObject({
       id: "com.jagosar.minimal.launcher",
-      version: "0.2.0",
+      version: "2.0.0",
       bgColor: "#000000",
       disableBackHistoryAPI: true,
     });

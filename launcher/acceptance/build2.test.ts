@@ -62,7 +62,7 @@ describe("AC-019 · Build ships the assets and stays Chromium 53 compatible", ()
     const info = JSON.parse(read("appinfo.json"));
     expect(info.disableBackHistoryAPI).toBe(true);
     expect(info.bgColor).toBe("#000000");
-    expect(info.version).toBe("0.2.0");
+    expect(info.version).toBe("2.0.0");
     expect(info.id).toBe("com.jagosar.minimal.launcher");
   });
 
