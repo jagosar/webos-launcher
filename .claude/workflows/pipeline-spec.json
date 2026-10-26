@@ -1,0 +1,414 @@
+{
+  "_comment": "Shared by the native workflow (.claude/workflows/agentic-implement.js) and the fallback engine (agentic.py run-pipeline). The workflow keeps copies of the schemas, prompts and constants because a workflow script has no disk; test_workflow.mjs fails if they differ from this file.",
+  "constants": {
+    "blocking": [
+      "critical",
+      "high"
+    ],
+    "refute_confidence": 0.7,
+    "audit_rounds": 2
+  },
+  "prompts": {
+    "implement": "Implement {wp} according to architecture.md.{rules}",
+    "fix": "Fix {wp} according to architecture.md. The code already exists. These are the defects the judges (reviewer, QA and verification) attribute to your package, as JSON:\n{defects}\nStay within the contract, do not touch other packages' files or the acceptance tests, and keep the acceptance tests of your criteria green.{retry}{rules}",
+    "fix_retry": "\nThis is attempt {attempt} of {max}: the previous one did not fix it. The defects it was given:\n{previous}\nWhat it changed is in {diff}: read it first and do not repeat that approach. If you try something different, say in internal_decisions how it differs and why it should work.",
+    "test_author": "Write the acceptance tests according to architecture.md.{rules}",
+    "test_author_revision": "Revise the acceptance tests according to architecture.md. An independent auditor found these weak points, as JSON:\n{weak}\nStrengthen them: the tests of each criterion must fail against an empty or trivial implementation (a stub that returns nothing, None or a constant) and must cover the criterion's \"must not\". Keep them red for the right reason.{rules}",
+    "test_auditor": "Audit the acceptance tests against architecture.md. The test-author reports this coverage, as JSON:\n{coverage}{rules}",
+    "reviewer": "Review the integrated code according to architecture.md.{rules}",
+    "verifier": "Try to refute this finding from the reviewer, as JSON:\n{finding}",
+    "qa": "Run the system's QA validation according to architecture.md.{rules}",
+    "doc_updater": "Update the documentation according to architecture.md and the integrated code.{rules}"
+  },
+  "schemas": {
+    "gatekeeper": {
+      "type": "object",
+      "required": [
+        "exit_code",
+        "output"
+      ],
+      "properties": {
+        "exit_code": {
+          "type": "integer"
+        },
+        "output": {
+          "type": "string"
+        }
+      }
+    },
+    "test-author": {
+      "type": "object",
+      "required": [
+        "status",
+        "coverage",
+        "blocker"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "DONE",
+            "BLOCKER"
+          ]
+        },
+        "coverage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "ac",
+              "tests"
+            ],
+            "properties": {
+              "ac": {
+                "type": "string"
+              },
+              "tests": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "blocker": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "test-auditor": {
+      "type": "object",
+      "required": [
+        "status",
+        "findings"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "PASS",
+            "FAIL"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "severity",
+              "wp",
+              "file",
+              "problem",
+              "evidence"
+            ],
+            "properties": {
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "critical",
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              "wp": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer"
+              },
+              "problem": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "implementer": {
+      "type": "object",
+      "required": [
+        "status",
+        "wp",
+        "files",
+        "checks",
+        "internal_decisions",
+        "blocker"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "DONE",
+            "BLOCKER"
+          ]
+        },
+        "wp": {
+          "type": "string",
+          "pattern": "^WP-[0-9]+$"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "command",
+              "passed"
+            ],
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "passed": {
+                "type": "boolean"
+              },
+              "detail": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "internal_decisions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blocker": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "missing",
+            "section"
+          ],
+          "properties": {
+            "missing": {
+              "type": "string"
+            },
+            "section": {
+              "type": "string"
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "reviewer": {
+      "type": "object",
+      "required": [
+        "status",
+        "findings"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "PASS",
+            "FAIL"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "severity",
+              "wp",
+              "file",
+              "problem",
+              "evidence"
+            ],
+            "properties": {
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "critical",
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              "wp": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer"
+              },
+              "problem": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "verifier": {
+      "type": "object",
+      "required": [
+        "is_real",
+        "confidence",
+        "reasoning"
+      ],
+      "properties": {
+        "is_real": {
+          "type": "boolean"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "reasoning": {
+          "type": "string"
+        }
+      }
+    },
+    "qa": {
+      "type": "object",
+      "required": [
+        "status",
+        "plan",
+        "defects",
+        "gaps"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "PASS",
+            "FAIL",
+            "BLOCKER"
+          ]
+        },
+        "plan": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "defects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "severity",
+              "wp",
+              "kind",
+              "section",
+              "repro"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "critical",
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              "wp": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "implementation",
+                  "design"
+                ]
+              },
+              "section": {
+                "type": "string"
+              },
+              "repro": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "doc-updater": {
+      "type": "object",
+      "required": [
+        "status",
+        "files",
+        "changes",
+        "unverified",
+        "blocker"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "DONE",
+            "BLOCKER"
+          ]
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unverified": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blocker": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

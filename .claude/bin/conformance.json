@@ -1,0 +1,498 @@
+{
+ "_comment": "Scenarios run against both engines: the native workflow (test_workflow.mjs) and the fallback engine (pipeline.py, test_pipeline.py). Each engine is driven through a simulated world described here, and test_pipeline.py fails unless both make the same gate commands and agent calls, with the same prompts, and reach the same result.",
+ "plan": {
+  "waves": [
+   1,
+   2
+  ],
+  "acceptance": true,
+  "type": "feature",
+  "verify": [
+   "tests"
+  ],
+  "max_fix_cycles": 2,
+  "baseline": true,
+  "work_packages": {
+   "1": [
+    "WP-01",
+    "WP-02"
+   ],
+   "2": [
+    "WP-03"
+   ]
+  },
+  "agents": {
+   "WP-01": "implementer",
+   "WP-02": "implementer",
+   "WP-03": "implementer"
+  },
+  "wave_of": {
+   "WP-01": 1,
+   "WP-02": 1,
+   "WP-03": 2
+  }
+ },
+ "scenarios": [
+  {
+   "name": "happy path"
+  },
+  {
+   "name": "a wave in REVIEW stops before the next",
+   "gate_fail": [
+    {
+     "prefix": "close-stage 1 ",
+     "exit_code": 3,
+     "output": "OUTSIDE OWNERSHIP"
+    }
+   ]
+  },
+  {
+   "name": "verification fails on a package: it is fixed and verified again",
+   "verify": [
+    {
+     "exit_code": 3,
+     "output": {
+      "ok": false,
+      "blocking": [
+       "tests"
+      ],
+      "preexisting_failures": [],
+      "suspects": {
+       "WP-02": {
+        "phases": [
+         "tests"
+        ],
+        "files": [
+         "src/b/x.py"
+        ],
+        "acs": [
+         "AC-002"
+        ]
+       }
+      },
+      "phases": [
+       {
+        "name": "tests",
+        "passed": false,
+        "status": "fails",
+        "tail": [
+         "FAILED src/b/x.py test_ac_002"
+        ]
+       }
+      ]
+     }
+    },
+    null
+   ]
+  },
+  {
+   "name": "verification fails with no owner",
+   "verify": [
+    {
+     "exit_code": 3,
+     "output": {
+      "ok": false,
+      "suspects": {},
+      "phases": []
+     }
+    }
+   ]
+  },
+  {
+   "name": "verification never gets fixed",
+   "verify": [
+    {
+     "exit_code": 3,
+     "output": {
+      "ok": false,
+      "blocking": [
+       "tests"
+      ],
+      "preexisting_failures": [],
+      "suspects": {
+       "WP-01": {
+        "phases": [
+         "tests"
+        ],
+        "files": [
+         "src/b/x.py"
+        ],
+        "acs": [
+         "AC-002"
+        ]
+       }
+      },
+      "phases": [
+       {
+        "name": "tests",
+        "passed": false,
+        "status": "fails",
+        "tail": [
+         "FAILED src/b/x.py test_ac_002"
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "a defect that does not get fixed is capped",
+   "qa": [
+    {
+     "status": "FAIL",
+     "plan": [],
+     "defects": [
+      {
+       "id": "D1",
+       "severity": "high",
+       "wp": "WP-03",
+       "kind": "implementation",
+       "section": "6",
+       "repro": "x"
+      }
+     ],
+     "gaps": []
+    }
+   ]
+  },
+  {
+   "name": "a design defect is not fixed in a loop",
+   "qa": [
+    {
+     "status": "FAIL",
+     "plan": [],
+     "defects": [
+      {
+       "id": "D2",
+       "severity": "high",
+       "wp": "WP-01",
+       "kind": "design",
+       "section": "6",
+       "repro": "x"
+      }
+     ],
+     "gaps": []
+    }
+   ]
+  },
+  {
+   "name": "the fix limit is per package",
+   "qa": [
+    {
+     "status": "FAIL",
+     "plan": [],
+     "defects": [
+      {
+       "id": "A",
+       "severity": "high",
+       "wp": "WP-01",
+       "kind": "implementation",
+       "section": "6",
+       "repro": "x"
+      },
+      {
+       "id": "B",
+       "severity": "high",
+       "wp": "WP-03",
+       "kind": "implementation",
+       "section": "6",
+       "repro": "x"
+      }
+     ],
+     "gaps": []
+    },
+    {
+     "status": "FAIL",
+     "plan": [],
+     "defects": [
+      {
+       "id": "A",
+       "severity": "high",
+       "wp": "WP-01",
+       "kind": "implementation",
+       "section": "6",
+       "repro": "x"
+      }
+     ],
+     "gaps": []
+    },
+    {
+     "status": "FAIL",
+     "plan": [],
+     "defects": [
+      {
+       "id": "A",
+       "severity": "high",
+       "wp": "WP-01",
+       "kind": "implementation",
+       "section": "6",
+       "repro": "x"
+      },
+      {
+       "id": "C",
+       "severity": "high",
+       "wp": "WP-03",
+       "kind": "implementation",
+       "section": "6",
+       "repro": "x"
+      }
+     ],
+     "gaps": []
+    },
+    {
+     "status": "FAIL",
+     "plan": [],
+     "defects": [
+      {
+       "id": "C",
+       "severity": "high",
+       "wp": "WP-03",
+       "kind": "implementation",
+       "section": "6",
+       "repro": "x"
+      }
+     ],
+     "gaps": []
+    }
+   ]
+  },
+  {
+   "name": "a finding refuted with confidence does not block",
+   "review": [
+    {
+     "status": "FAIL",
+     "findings": [
+      {
+       "severity": "high",
+       "wp": "WP-01",
+       "file": "src/a.py",
+       "line": 3,
+       "problem": "p",
+       "evidence": "e"
+      }
+     ]
+    }
+   ],
+   "verifier": {
+    "is_real": false,
+    "confidence": 0.9,
+    "reasoning": "validated in the caller"
+   }
+  },
+  {
+   "name": "an uncertain refutation: the finding stands",
+   "review": [
+    {
+     "status": "FAIL",
+     "findings": [
+      {
+       "severity": "high",
+       "wp": "WP-02",
+       "file": "src/a.py",
+       "line": 3,
+       "problem": "p",
+       "evidence": "e"
+      }
+     ]
+    },
+    {
+     "status": "PASS",
+     "findings": []
+    }
+   ],
+   "verifier": {
+    "is_real": false,
+    "confidence": 0.4,
+    "reasoning": "not sure"
+   }
+  },
+  {
+   "name": "the reviewer wrote outside its zone",
+   "gate_fail": [
+    {
+     "prefix": "close-stage review",
+     "exit_code": 3,
+     "output": "OUTSIDE OWNERSHIP"
+    }
+   ]
+  },
+  {
+   "name": "QA wrote outside its zone",
+   "gate_fail": [
+    {
+     "prefix": "close-stage qa",
+     "exit_code": 3,
+     "output": "OUTSIDE OWNERSHIP"
+    }
+   ]
+  },
+  {
+   "name": "the test-auditor sends the test-author back once",
+   "audit": [
+    {
+     "status": "FAIL",
+     "findings": [
+      {
+       "severity": "high",
+       "wp": "AT",
+       "file": "acceptance/test_a.py",
+       "problem": "assert x is not None",
+       "evidence": "an empty stub passes"
+      }
+     ]
+    },
+    {
+     "status": "PASS",
+     "findings": []
+    }
+   ]
+  },
+  {
+   "name": "tests still weak after the revision",
+   "audit": [
+    {
+     "status": "FAIL",
+     "findings": [
+      {
+       "severity": "critical",
+       "wp": "AT",
+       "file": "acceptance/test_a.py",
+       "problem": "assert x is not None",
+       "evidence": "an empty stub passes"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "the test-auditor returns nothing",
+   "audit": [
+    null
+   ]
+  },
+  {
+   "name": "the test-author cannot test a criterion",
+   "test_author": {
+    "status": "BLOCKER",
+    "coverage": [],
+    "blocker": "AC-003 is not observable"
+   },
+   "gate_fail": [
+    {
+     "prefix": "close-stage acceptance",
+     "exit_code": 3,
+     "output": "RESULT: REVIEW"
+    }
+   ]
+  },
+  {
+   "name": "living documentation after green QA",
+   "plan": {
+    "docs": true,
+    "codemap": "docs/CODEMAP.md"
+   }
+  },
+  {
+   "name": "documentation with broken links",
+   "plan": {
+    "docs": true,
+    "codemap": "docs/CODEMAP.md"
+   },
+   "gate_fail": [
+    {
+     "prefix": "docs-check",
+     "exit_code": 3,
+     "output": {
+      "ok": false,
+      "checked": 2,
+      "broken": [
+       {
+        "file": "README.md",
+        "line": 4,
+        "target": "docs/x.md",
+        "kind": "link"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "the doc-updater wrote outside its zone",
+   "plan": {
+    "docs": true,
+    "codemap": "docs/CODEMAP.md"
+   },
+   "gate_fail": [
+    {
+     "prefix": "close-stage docs",
+     "exit_code": 3,
+     "output": "OUTSIDE OWNERSHIP"
+    }
+   ]
+  },
+  {
+   "name": "the doc-updater claims changes that are not on disk",
+   "plan": {
+    "docs": true,
+    "codemap": "docs/CODEMAP.md"
+   },
+   "gate_fail": [
+    {
+     "prefix": "close-stage docs",
+     "exit_code": 0,
+     "output": "DOCS: 0 file(s) changed\nRESULT: OK"
+    }
+   ]
+  },
+  {
+   "name": "refactor: the existing suite is the baseline",
+   "plan": {
+    "type": "refactor"
+   }
+  },
+  {
+   "name": "start_wave skips the baseline, wave 0 and earlier waves",
+   "args": {
+    "start_wave": 2
+   }
+  },
+  {
+   "name": "baseline with a pre-existing failure does not block",
+   "gate_fail": [
+    {
+     "prefix": "baseline",
+     "exit_code": 0,
+     "output": {
+      "phases": [],
+      "preexisting_failures": [
+       "lint"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "a baseline command that cannot run blocks",
+   "gate_fail": [
+    {
+     "prefix": "baseline",
+     "exit_code": 1,
+     "output": "{}"
+    }
+   ]
+  },
+  {
+   "name": "language rules reach the agents",
+   "plan": {
+    "rules": [
+     ".claude/rules/agentic/common.md",
+     ".claude/rules/agentic/python.md"
+    ],
+    "docs": true,
+    "codemap": "docs/CODEMAP.md"
+   }
+  }
+ ]
+}
