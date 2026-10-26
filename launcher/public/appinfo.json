@@ -1,0 +1,13 @@
+{
+  "id": "com.jagosar.minimal.launcher",
+  "version": "0.2.0",
+  "vendor": "jagosar",
+  "type": "web",
+  "main": "index.html",
+  "title": "Minimal Launcher",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "resolution": "1920x1080",
+  "bgColor": "#000000",
+  "disableBackHistoryAPI": true
+}

@@ -1,0 +1,16 @@
+{
+  "rowStyle": "names",
+  "clock": "24",
+  "background": "night",
+  "veil": 80,
+  "weather": { "name": "Madrid", "lat": 40.4168, "lon": -3.7038 },
+  "units": "c",
+  "tiles": [
+    { "type": "input", "id": "com.webos.app.livetv", "title": "TV" },
+    { "id": "youtube.leanback.v4", "title": "YouTube" },
+    { "id": "netflix", "title": "Netflix" },
+    { "id": "amazon", "title": "Prime Video" },
+    { "type": "input", "id": "com.webos.app.hdmi1", "title": "HDMI 1" },
+    { "type": "web", "title": "El País", "url": "https://elpais.com" }
+  ]
+}

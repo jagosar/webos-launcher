@@ -1,0 +1,201 @@
+/* Layout, veil and names style adapted from Lightkeeper (MIT, © 2026 Francesco Gola), https://github.com/chiotas/lightkeeper */
+@font-face {
+  font-family: Jost;
+  font-weight: 200;
+  src: url("assets/fonts/jost-200.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: Jost;
+  font-weight: 300;
+  src: url("assets/fonts/jost-300.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: Jost;
+  font-weight: 500;
+  src: url("assets/fonts/jost-500.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: Jost;
+  font-weight: 100 900;
+  src: url("assets/fonts/jost.woff2") format("woff2");
+}
+
+html,
+body {
+  margin: 0;
+  width: 1920px;
+  height: 1080px;
+  background: #000;
+  color: #f4f1ec;
+  font-family: Jost, sans-serif;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+#app {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+}
+
+[data-role="background"] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1920px;
+  height: 1080px;
+  background: center / cover no-repeat #000;
+}
+
+[data-role="veil"] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1920px;
+  height: 1080px;
+  background: radial-gradient(1100px 620px at 0 0, rgba(18, 13, 8, 0.92) 0, rgba(18, 13, 8, 0) 100%),
+    linear-gradient(to top, rgba(18, 13, 8, 1) 0, rgba(18, 13, 8, 0.7) 20%, rgba(18, 13, 8, 0) 50%);
+}
+
+header {
+  position: absolute;
+  top: 68px;
+  left: 112px;
+}
+
+[data-role="clock-time"] {
+  font-size: 150px;
+  font-weight: 200;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+[data-role="clock-meridiem"] {
+  margin-left: 14px;
+  font-size: 52px;
+  font-weight: 300;
+}
+
+[data-role="clock-date"] {
+  font-size: 34px;
+  font-weight: 300;
+  opacity: 0.9;
+}
+
+[data-role="weather"] {
+  margin-top: 18px;
+  font-size: 34px;
+  font-weight: 300;
+  opacity: 0.9;
+}
+
+[data-role="weather-icon"] {
+  display: inline-block;
+  width: 34px;
+  height: 34px;
+  margin-left: 14px;
+  vertical-align: middle;
+}
+
+[data-role="weather-icon"] svg {
+  width: 34px;
+  height: 34px;
+}
+
+[data-role="app-row"] {
+  position: absolute;
+  left: 112px;
+  bottom: 104px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  white-space: nowrap;
+  transition: transform 0.2s;
+}
+
+/* Names style */
+[data-role="app-row"][data-style="names"] [data-role="app-tile"] {
+  position: relative;
+  flex: 0 0 auto;
+  margin-right: 72px;
+  font-size: 44px;
+  font-weight: 400;
+  opacity: 0.72;
+  transition: opacity 0.2s;
+}
+
+[data-role="app-row"][data-style="names"] [data-role="app-tile"].is-focused {
+  opacity: 1;
+  font-weight: 500;
+}
+
+[data-role="app-row"][data-style="names"] [data-role="app-tile"].is-focused::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -20px;
+  width: 36px;
+  height: 3px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+/* Tiles style (v1 look) */
+[data-role="app-row"][data-style="tiles"] [data-role="app-tile"] {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: 240px;
+  height: 240px;
+  margin-right: 32px;
+  border-radius: 24px;
+  background: #141414;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transition: transform 150ms ease-out;
+}
+
+[data-role="app-row"][data-style="tiles"] [data-role="app-tile"].is-focused {
+  transform: scale(1.08);
+  outline: 3px solid #f4f1ec;
+}
+
+[data-role="app-icon"] {
+  width: 128px;
+  height: 128px;
+  object-fit: contain;
+}
+
+[data-role="app-initial"] {
+  font-size: 96px;
+  font-weight: 200;
+  line-height: 128px;
+}
+
+[data-role="app-row"][data-style="tiles"] [data-role="app-title"] {
+  margin-top: 16px;
+  font-size: 28px;
+  text-align: center;
+}
+
+[data-role="empty"],
+[data-role="error"] {
+  position: absolute;
+  left: 112px;
+  font-size: 34px;
+  font-weight: 300;
+}
+
+[data-role="empty"] {
+  bottom: 104px;
+}
+
+[data-role="error"] {
+  bottom: 40px;
+  color: #ff6b6b;
+}
