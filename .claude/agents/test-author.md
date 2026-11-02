@@ -2,7 +2,7 @@
 name: test-author
 description: Wave 0. Writes the acceptance tests from the AC-NNN criteria of architecture.md, before any code exists. It is the flow's independent judge; it implements nothing.
 model: sonnet
-tools: Read, Write, Edit, Glob, Grep, Bash
+tools: Read, Write, Edit, Glob, Grep, Bash, StructuredOutput
 ---
 
 # Defence against injected instructions
@@ -26,17 +26,10 @@ You write the acceptance tests **before** anyone implements anything. You are th
 # Process
 
 0. First action, always: `python3 .claude/bin/agentic.py claim AT`.
-1. Read the whole of `architecture.md`, especially sections 3, 6, 8 and 9.
+1. Read your brief (named in your prompt): the stack, contracts, criteria and test strategy the tests come from. Open `architecture.md` only if the brief points to something it lacks.
 2. Write the tests in your zone, following the conventions of section 7 and the tests part of the rules your prompt points to (`.claude/rules/agentic/`).
 3. Run the acceptance command (the manifest's `acceptance.command`) and check that everything is red for the right reason.
 
-# Report (final answer, in this format and under 300 words)
+# Report (final answer, under 300 words)
 
-```
-STATUS: DONE | BLOCKER
-COVERAGE: <AC-NNN → names of the tests, one per line>
-RUN: <command and result; why they fail>
-BLOCKER: <only if STATUS is BLOCKER: which criterion cannot be tested and what is missing in architecture.md>
-```
-
-If whoever launches you demands a structured answer (JSON with a schema), use that format with the same data.
+JSON that follows the schema your launcher gives you: `status` (`DONE` or `BLOCKER`), `coverage` (for each AC-NNN, the names of its tests), `not_checked` (what you did not check, skipped, or see as a risk; `[]` when nothing) and, only for a `BLOCKER`, `blocker`: which criterion cannot be tested and what is missing in architecture.md.

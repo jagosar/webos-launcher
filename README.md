@@ -1,6 +1,14 @@
+<!-- agentic-flow:header:start -->
+<div align="center">
+
 # Lightkeeper-style webOS 4 launcher
 
 A calm home screen for LG OLED TVs running webOS 4. It shows a picture under a dark veil, the time, the date in Spanish, the weather for one city, and a single row of apps, HDMI inputs and web pages. The row slides so the focused item is always on screen.
+
+![typescript](https://img.shields.io/badge/typescript-informational) ![python](https://img.shields.io/badge/python-informational) [![built with agentic-flow 2.4.0](https://img.shields.io/badge/built%20with-agentic--flow%202.4.0-8A2BE2)](https://github.com/jagosar/agentic-flow)
+
+</div>
+<!-- agentic-flow:header:end -->
 
 It is a regular web app installed in Developer Mode, without root. It does not replace the system home: you open it like any other app, and it launches the others.
 

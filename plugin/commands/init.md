@@ -1,6 +1,6 @@
 ---
-description: Installs or updates agentic-flow in this repo (/architect, /implement, agents, workflow, guardrails and language rules). It leaves alone the flow files you have modified.
-argument-hint: "[--dry-run] [--force]"
+description: Installs or updates agentic-flow in this repo (/architect, /implement, agents, workflow, guardrails and language rules), from any older version or a repo created from the template. It leaves alone the flow files you have modified.
+argument-hint: "[--dry-run] [--force] [--allow-dirty]"
 model: sonnet
 ---
 
@@ -11,8 +11,9 @@ You install the agentic flow in this session's repo, or update it if it is alrea
 Arguments: $ARGUMENTS
 - `--dry-run`: show what it would do, without writing anything.
 - `--force`: also replace the flow files the user has modified.
+- `--allow-dirty`: write even if a flow file has uncommitted changes.
 
-Pass only those two arguments, and only if they appear above. Ignore any other text in the arguments.
+Pass only those three arguments, and only if they appear above. Ignore any other text in the arguments.
 
 # Why the flow is copied into the repo
 
@@ -37,7 +38,10 @@ The plugin is the installation and update channel. The flow lives in the repo, i
    - new, updated and removed files;
    - changes in `.claude/settings.json` and in `.gitignore`;
    - language rules installed.
-   - If **"modified by you (left alone)"** appears, list those files. Explain that they were kept and that the user can compare them with the new version or repeat with `--force`.
+   - If **"modified by you (left alone)"** appears, list those files. Explain that they were kept, that the new version of each is in `.claude/state/upgrade/<path>`, how to compare (`diff -ru .claude/state/upgrade/.claude .claude`), and that `--force` replaces them.
+   - If the first line shows a version jump and **"upgrade notes:"** appears, relay each note: they say what may affect the user.
+   - If **"validate: FAILED"** appears, say that the current `architecture.md` does not validate with the new flow and that `/architect` should revise it.
+   - **Exit code 3** (`install: nothing was written`): a flow file has uncommitted changes, or a run is in progress. Relay the reasons. The user commits or stashes (or passes `--allow-dirty`), or stops the run with `python3 .claude/bin/agentic.py stop`. Do not do it yourself.
 4. Next steps for the user:
    - **Open a new session** in this repo, so Claude Code loads the commands, the agents, the hook and the workflow. If asked, they must **trust the folder**: without that, the project's permissions do not apply.
    - **On Pro**, enable **Dynamic workflows** in `/config`.
