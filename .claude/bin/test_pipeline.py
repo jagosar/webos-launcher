@@ -11,11 +11,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import textwrap
 import unittest
 from pathlib import Path
 
-from test_agentic import SCRIPT, Repo
+from test_agentic import PY, SCRIPT, Repo, testutil
 
 BIN = SCRIPT.parent
 WORKFLOWS = SCRIPT.parents[1] / "workflows"
@@ -58,10 +57,14 @@ def world(decl):
             return {"exit_code": 0, "output": json.dumps({"path": "docs/CODEMAP.md", "files": 3, "changed": True})}
         if cmd == "docs-check":
             return {"exit_code": 0, "output": json.dumps({"ok": True, "checked": 2, "broken": []})}
+        if cmd == "callers":
+            return {"exit_code": 0, "output": json.dumps({"changed": [], "symbols": {}, "callers": [], "truncated": False})}
         return {"exit_code": 0, "output": "RESULTADO: OK"}
 
     def gate(cmds, label):
         state["gate_calls"] += 1
+        if any(c.startswith(prefix) for prefix in decl.get("gate_lost", []) for c in cmds):
+            raise RuntimeError("gatekeeper returned nothing")  # a timeout or a dead agent
         steps = []
         for c in cmds:
             r = respond(c)
@@ -69,6 +72,13 @@ def world(decl):
             if r["exit_code"] != 0:
                 break
         return {"steps": steps}
+
+    reports = decl.get("reports") or {}
+    calls = {}
+
+    def override(report, key):
+        extra = reports.get(key)
+        return {**report, **extra} if extra else report
 
     def agent(prompt, agent_type, label, ident):
         state["calls"].append((agent_type, label, prompt))
@@ -78,15 +88,22 @@ def world(decl):
             state["audits"] += 1
             return pick(decl["audit"], state["audits"]) if decl.get("audit") else {"status": "PASS", "findings": []}
         if agent_type == "implementer":
-            return {"status": "DONE", "wp": label.split(" ")[0], "files": [], "checks": [], "internal_decisions": [], "blocker": None}
+            wp = label.split(" ")[0]
+            base = {"status": "DONE", "wp": wp, "files": [], "checks": [], "internal_decisions": [], "blocker": None,
+                    "not_checked": [], "concerns": [], "missing_context": None}
+            extra = (reports.get("implementer") or {}).get(wp)
+            if isinstance(extra, list):  # one override per call of that package: the first, then the last
+                calls[wp] = calls.get(wp, 0) + 1
+                extra = pick(extra, calls[wp])
+            return {**base, **extra} if extra else base
         if agent_type == "reviewer":
             state["reviews"] += 1
-            return pick(decl["review"], state["reviews"]) if decl.get("review") else {"status": "PASS", "findings": []}
+            return override(pick(decl["review"], state["reviews"]) if decl.get("review") else {"status": "PASS", "findings": []}, "reviewer")
         if agent_type == "verifier":
             return decl.get("verifier") or {"is_real": True, "confidence": 0.9, "reasoning": "it holds"}
         if agent_type == "qa":
             state["qas"] += 1
-            return pick(decl["qa"], state["qas"]) if decl.get("qa") else {"status": "PASS", "plan": ["contracts"], "defects": [], "gaps": []}
+            return override(pick(decl["qa"], state["qas"]) if decl.get("qa") else {"status": "PASS", "plan": ["contracts"], "defects": [], "gaps": []}, "qa")
         if agent_type == "doc-updater":
             return decl.get("docs") or {"status": "DONE", "files": ["README.md", "CHANGELOG.md"],
                                         "changes": ["usage of the new command"], "unverified": [], "blocker": None}
@@ -102,9 +119,14 @@ def summarize(result, state):
         seen[key] = seen.get(key, 0) + 1
         prompts[f"{key}#{seen[key]}"] = prompt
         agents.append(key)
-    return {"result": result["result"], "failed_stage": result.get("failed_stage"), "fix_cycles": result["fix_cycles"],
+    return {"result": result["result"], "failed_stage": result.get("failed_stage"), "detail": result.get("detail"),
+            "fix_cycles": result["fix_cycles"],
             "pending": sorted(p.get("type") for p in result.get("pending", [])), "gates": state["gates"],
-            "gate_calls": state["gate_calls"], "agents": sorted(agents), "prompts": prompts}
+            "gate_calls": state["gate_calls"], "agents": sorted(agents), "prompts": prompts,
+            "not_checked": sorted(f"{e['agent']}:{e['label']}" for e in result.get("not_checked", [])),
+            "gate_denials": result.get("gate_denials", {}),
+            "review_callers": (result.get("review") or {}).get("callers", 0),
+            "verification_failures": len(result.get("verification_failures") or [])}
 
 
 def run_scenario(decl):
@@ -120,7 +142,7 @@ class ConformanceTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        r = subprocess.run(["node", str(BIN / "test_workflow.mjs"), "--dump"], capture_output=True, text=True)
+        r = subprocess.run(["node", str(BIN / "test_workflow.mjs"), "--dump"], capture_output=True, text=True, encoding="utf-8", errors="replace")
         assert r.returncode == 0, r.stdout + r.stderr
         cls.workflow = json.loads(r.stdout)
 
@@ -129,19 +151,47 @@ class ConformanceTests(unittest.TestCase):
         for decl in CONFORMANCE["scenarios"]:
             with self.subTest(scenario=decl["name"]):
                 mine, theirs = run_scenario(decl), self.workflow[decl["name"]]
-                for key in ("result", "failed_stage", "fix_cycles", "pending", "gates", "gate_calls", "agents"):
+                for key in ("result", "failed_stage", "detail", "fix_cycles", "pending", "gates", "gate_calls", "agents", "not_checked", "gate_denials", "review_callers", "verification_failures"):
                     self.assertEqual(mine[key], theirs[key], key)
                 self.assertEqual(mine["prompts"], theirs["prompts"], "the agents must receive the same prompts")
 
     def test_the_spec_has_everything_the_agents_are_asked_for(self):
         for name in ("test-author", "test-auditor", "implementer", "reviewer", "verifier", "qa", "doc-updater", "gatekeeper"):
             self.assertIn(name, SPEC["schemas"])
+        for name, text in SPEC["prompts"].items():
+            if name in ("implement", "fix", "test_author", "test_author_revision", "test_auditor"):
+                self.assertIn("{brief}", text, f"{name} must point to the agent's brief")
         for name in ("implement", "fix", "fix_retry", "test_author", "test_author_revision", "test_auditor", "reviewer",
                      "verifier", "qa", "doc_updater"):
             self.assertIn(name, SPEC["prompts"])
 
 
 class EngineTests(unittest.TestCase):
+    def test_new_scenarios_end_as_described(self):
+        by_name = {d["name"]: d for d in CONFORMANCE["scenarios"]}
+        needs = run_scenario(by_name["needs validation goes to pending and does not block"])
+        self.assertEqual((needs["result"], needs["pending"]), ("OK", ["needs validation", "needs validation"]))
+        collected = run_scenario(by_name["not_checked is collected from every report"])
+        self.assertEqual(collected["not_checked"], ["implementer:WP-02", "reviewer:reviewer"])
+        self.assertEqual(run_scenario(by_name["gate denials are summed from close-stage"])["gate_denials"], {"WP-01": 1})
+        concerns = run_scenario(by_name["concerns go to pending and to the reviewer"])
+        self.assertEqual((concerns["result"], concerns["pending"]), ("OK", ["concern"]))
+        self.assertIn("may spin", concerns["prompts"]["reviewer:reviewer#1"])
+        once = run_scenario(by_name["needs context is re-dispatched once with the whole document"])
+        self.assertEqual((once["result"], once["agents"].count("implementer:WP-02 (context)")), ("OK", 1))
+        twice = run_scenario(by_name["needs context twice is a blocker"])
+        self.assertEqual((twice["result"], twice["failed_stage"], twice["agents"].count("implementer:WP-02 (context)")),
+                         ("REVIEW", "wave 1", 1))
+        in_fix = run_scenario(by_name["needs context in a fix wave is a blocker"])
+        self.assertEqual((in_fix["result"], in_fix["failed_stage"]), ("REVIEW", "fix wave 1"))
+        self.assertFalse([a for a in in_fix["agents"] if "(context)" in a])
+        reached = run_scenario(by_name["callers reach the reviewer"])
+        self.assertEqual(reached["review_callers"], 1)
+        self.assertIn("src/b/x.py", reached["prompts"]["reviewer:reviewer#1"])
+        ignored = run_scenario(by_name["callers that are not JSON are ignored"])
+        self.assertEqual(ignored["review_callers"], 0)
+        self.assertNotIn("Callers", ignored["prompts"]["reviewer:reviewer#1"])
+
     def test_halted_is_not_swallowed_like_an_agent_error(self):
         def agent(prompt, agent_type, label, ident):
             raise pipeline.Halted()
@@ -173,47 +223,27 @@ class EngineTests(unittest.TestCase):
             "json text in result": ({"result": '{"status": "PASS"}'}, {"status": "PASS"}),
             "object in result": ({"result": {"status": "PASS"}}, {"status": "PASS"}),
             "prose": ({"result": "STATUS: DONE"}, None),
+            # seen in a real run (CLI 2.1.316): no structured_output, the report as a fenced block after the prose
+            "fenced json after prose": ({"result": 'Done.\n\n```json\n{"status": "DONE",\n "x": [1]}\n```'},
+                                        {"status": "DONE", "x": [1]}),
+            "last fenced block wins": ({"result": '```json\n{"status": "FAIL"}\n```\nfix\n```json\n{"status": "DONE"}\n```'},
+                                       {"status": "DONE"}),
+            "broken fenced json": ({"result": '```json\n{"status": \n```'}, None),
             "missing required key": ({"structured_output": {"wp": "WP-01"}}, None),
         }
         for name, (data, expected) in cases.items():
             with self.subTest(case=name):
                 f = tmp / "r.json"
-                f.write_text(json.dumps(data))
+                f.write_text(json.dumps(data), encoding="utf-8")
                 self.assertEqual(agentic.structured_report(f, schema), expected)
-        f.write_text("not json")
+        f.write_text("not json", encoding="utf-8")
         self.assertIsNone(agentic.structured_report(f, schema))
         self.assertIsNone(agentic.structured_report(tmp / "missing.json", schema))
 
 
-FAKE_CLAUDE = textwrap.dedent("""\
-    #!/usr/bin/env python3
-    import json, os, sys
-    argv = sys.argv[1:]
-    agent = argv[argv.index("--agent") + 1]
-    ident = os.environ.get("AGENTIC_WP")
-    with open(os.path.join(os.environ["FAKE_LOG_DIR"], "calls.jsonl"), "a") as f:
-        f.write(json.dumps({"agent": agent, "id": ident, "argv": argv}) + "\\n")
-    def write(rel):
-        os.makedirs(os.path.dirname(rel) or ".", exist_ok=True)
-        open(rel, "w").write("x = 1\\n")
-    report = {}
-    if agent == "implementer":
-        write({"WP-01": "src/a.py", "WP-02": "src/b/x.py", "WP-03": "src/c.py"}[ident])
-        if os.environ.get("FAKE_ROGUE") and ident == "WP-02":
-            write("other.py")  # a file nobody owns
-        report = {"status": "DONE", "wp": ident, "files": [], "checks": [], "internal_decisions": [], "blocker": None}
-    elif agent == "test-author":
-        report = {"status": "DONE", "coverage": [{"ac": "AC-001", "tests": ["t"]}], "blocker": None}
-    elif agent in ("test-auditor", "reviewer"):
-        report = {"status": "PASS", "findings": []}
-    elif agent == "qa":
-        report = {"status": "PASS", "plan": [], "defects": [], "gaps": []}
-    print(json.dumps({"type": "result", "structured_output": report}))
-""")
-
 E2E_MANIFEST = {
     "allow_bash": ["Bash(python3 -m unittest:*)"],
-    "acceptance": {"files": ["acceptance/"], "command": "python3 acc.py"},
+    "acceptance": {"files": ["acceptance/"], "command": f"{PY} acc.py"},
     "work_packages": [
         {"id": "WP-01", "wave": 1, "depends_on": [], "files": ["src/a.py"], "acs": ["AC-001"]},
         {"id": "WP-02", "wave": 1, "depends_on": [], "files": ["src/b/"]},
@@ -228,14 +258,11 @@ class RunPipelineEndToEndTests(unittest.TestCase):
     def setUp(self):
         self.repo = Repo(E2E_MANIFEST)
         self.bin = Path(tempfile.mkdtemp(prefix="fake-claude-"))
-        (self.bin / "claude").write_text(FAKE_CLAUDE)
-        (self.bin / "claude").chmod(0o755)
         self.logs = Path(tempfile.mkdtemp(prefix="fake-logs-"))
-        self.repo.env.update(PATH=f"{self.bin}{os.pathsep}{os.environ['PATH']}", FAKE_LOG_DIR=str(self.logs))
+        self.repo.env.update(AGENTIC_CLAUDE=testutil.install_fake_claude(self.bin), FAKE_LOG_DIR=str(self.logs),
+                             FAKE_WRITE="1", FAKE_MODE="nousage")
         # red until the three packages exist
         self.repo.write("acc.py", "import os, sys\nsys.exit(0 if all(os.path.exists(p) for p in ('src/a.py', 'src/b/x.py', 'src/c.py')) else 1)\n")
-        (self.repo.dir / ".claude" / "workflows").mkdir(parents=True)
-        shutil.copy(WORKFLOWS / "pipeline-spec.json", self.repo.dir / ".claude" / "workflows" / "pipeline-spec.json")
         subprocess.run(["git", "add", "-A"], cwd=self.repo.dir, check=True)
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], cwd=self.repo.dir, check=True)
 
@@ -245,10 +272,10 @@ class RunPipelineEndToEndTests(unittest.TestCase):
         shutil.rmtree(self.logs, ignore_errors=True)
 
     def calls(self):
-        return [json.loads(line) for line in (self.logs / "calls.jsonl").read_text().splitlines()]
+        return testutil.fake_calls(self.logs)
 
     def saved(self):
-        return json.loads((self.repo.dir / ".claude/state/runs/workflow-result.json").read_text())
+        return json.loads((self.repo.dir / ".claude/state/runs/workflow-result.json").read_text(encoding="utf-8"))
 
     def test_a_whole_run_goes_to_ok(self):
         r = self.repo.run("run-pipeline")
@@ -263,9 +290,9 @@ class RunPipelineEndToEndTests(unittest.TestCase):
         self.assertEqual(order[1], "test-auditor")
         self.assertEqual(sorted(order[2:4]), ["implementer", "implementer"])
         self.assertEqual(order[4:], ["implementer", "reviewer", "qa"], "wave 2, then the judges")
-        state = json.loads((self.repo.dir / ".claude/state/pipeline.json").read_text())
+        state = json.loads((self.repo.dir / ".claude/state/pipeline.json").read_text(encoding="utf-8"))
         self.assertEqual(state["completed_waves"], [1, 2])
-        ledger = json.loads((self.repo.dir / ".claude/state/ledger.json").read_text())
+        ledger = json.loads((self.repo.dir / ".claude/state/ledger.json").read_text(encoding="utf-8"))
         self.assertTrue(all(ledger[i]["state"] in ("done", "pass") for i in ("WP-01", "WP-02", "WP-03", "AT", "QA", "REVIEW")), ledger)
 
     def test_every_agent_runs_with_its_schema_identity_and_tools(self):
@@ -295,15 +322,30 @@ class RunPipelineEndToEndTests(unittest.TestCase):
     def test_resume_continues_after_the_waves_that_finished(self):
         self.repo.run("run-pipeline", env={"FAKE_ROGUE": "1"})  # wave 1 fails: nothing completed
         state = self.repo.dir / ".claude/state/pipeline.json"
-        self.assertFalse(state.exists() and json.loads(state.read_text())["completed_waves"])
-        state.write_text(json.dumps({"completed_waves": [1]}))
-        (self.logs / "calls.jsonl").unlink()
+        self.assertFalse(state.exists() and json.loads(state.read_text(encoding="utf-8"))["completed_waves"])
+        state.write_text(json.dumps({"completed_waves": [1]}), encoding="utf-8")
+        for f in self.logs.glob("call-*.json"):
+            f.unlink()
         self.repo.write("src/a.py")
         self.repo.write("src/b/x.py")
         r = self.repo.run("run-pipeline", "--resume")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual([c["id"] for c in self.calls() if c["agent"] == "implementer"], ["WP-03"], "only wave 2 runs")
         self.assertNotIn("test-author", [c["agent"] for c in self.calls()], "no wave 0 again")
+
+    def test_a_confirmed_review_finding_goes_through_a_fix_cycle(self):
+        # The real close-stage: a failed review is a judgement, not a write outside ownership.
+        r = self.repo.run("run-pipeline", env={"FAKE_REVIEW_FINDING": "WP-01"})
+        result = self.saved()
+        self.assertEqual((result["result"], result.get("failed_stage"), result["fix_cycles"]), ("OK", None, 1), r.stdout)
+        self.assertIn("WP-01 (fix)", [c["prompt"].split(".")[0].replace("Fix ", "") + " (fix)" for c in self.calls()
+                                      if c["prompt"].startswith("Fix ")])
+
+    def test_a_blocking_qa_defect_goes_through_a_fix_cycle(self):
+        r = self.repo.run("run-pipeline", env={"FAKE_QA_DEFECT": "WP-02"})
+        result = self.saved()
+        self.assertEqual((result["result"], result.get("failed_stage"), result["fix_cycles"]), ("OK", None, 1), r.stdout)
+        self.assertTrue(any(c["prompt"].startswith("Fix WP-02.") for c in self.calls()))
 
     def test_usage_errors(self):
         self.assertEqual(self.repo.run("run-pipeline", "--wave", "2").returncode, 1)

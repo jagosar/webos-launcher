@@ -9,16 +9,17 @@
     "audit_rounds": 2
   },
   "prompts": {
-    "implement": "Implement {wp} according to architecture.md.{rules}",
-    "fix": "Fix {wp} according to architecture.md. The code already exists. These are the defects the judges (reviewer, QA and verification) attribute to your package, as JSON:\n{defects}\nStay within the contract, do not touch other packages' files or the acceptance tests, and keep the acceptance tests of your criteria green.{retry}{rules}",
+    "implement": "Implement {wp}. Your brief is {brief}: the parts of architecture.md your package needs.{rules}",
+    "fix": "Fix {wp}. Your brief is {brief}. The code already exists. These are the defects the judges (reviewer, QA and verification) attribute to your package, as JSON:\n{defects}\nStay within the contract, do not touch other packages' files or the acceptance tests, and keep the acceptance tests of your criteria green.{retry}{rules}",
     "fix_retry": "\nThis is attempt {attempt} of {max}: the previous one did not fix it. The defects it was given:\n{previous}\nWhat it changed is in {diff}: read it first and do not repeat that approach. If you try something different, say in internal_decisions how it differs and why it should work.",
-    "test_author": "Write the acceptance tests according to architecture.md.{rules}",
-    "test_author_revision": "Revise the acceptance tests according to architecture.md. An independent auditor found these weak points, as JSON:\n{weak}\nStrengthen them: the tests of each criterion must fail against an empty or trivial implementation (a stub that returns nothing, None or a constant) and must cover the criterion's \"must not\". Keep them red for the right reason.{rules}",
-    "test_auditor": "Audit the acceptance tests against architecture.md. The test-author reports this coverage, as JSON:\n{coverage}{rules}",
-    "reviewer": "Review the integrated code according to architecture.md.{rules}",
+    "test_author": "Write the acceptance tests. Your brief is {brief}: the parts of architecture.md they need.{rules}",
+    "test_author_revision": "Revise the acceptance tests (your brief is {brief}). An independent auditor found these weak points, as JSON:\n{weak}\nStrengthen them: the tests of each criterion must fail against an empty or trivial implementation (a stub that returns nothing, None or a constant) and must cover the criterion's \"must not\". Keep them red for the right reason.{rules}",
+    "test_auditor": "Audit the acceptance tests against the brief they were written from, {brief}. The test-author reports this coverage, as JSON:\n{coverage}{rules}",
+    "reviewer": "Review the integrated code according to architecture.md.{callers}{concerns}{rules}",
     "verifier": "Try to refute this finding from the reviewer, as JSON:\n{finding}",
     "qa": "Run the system's QA validation according to architecture.md.{rules}",
-    "doc_updater": "Update the documentation according to architecture.md and the integrated code.{rules}"
+    "doc_updater": "Update the documentation according to architecture.md and the integrated code.{rules}",
+    "implement_full": "Implement {wp}. Your first attempt returned NEEDS_CONTEXT: {missing}. This time your brief is architecture.md, whole: read it and implement. If the document does not settle it, return BLOCKED with the section that should.{rules}"
   },
   "schemas": {
     "gatekeeper": {
@@ -41,7 +42,8 @@
       "required": [
         "status",
         "coverage",
-        "blocker"
+        "blocker",
+        "not_checked"
       ],
       "properties": {
         "status": {
@@ -77,6 +79,12 @@
             "string",
             "null"
           ]
+        },
+        "not_checked": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -84,7 +92,8 @@
       "type": "object",
       "required": [
         "status",
-        "findings"
+        "findings",
+        "not_checked"
       ],
       "properties": {
         "status": {
@@ -132,6 +141,12 @@
               }
             }
           }
+        },
+        "not_checked": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -143,14 +158,19 @@
         "files",
         "checks",
         "internal_decisions",
-        "blocker"
+        "blocker",
+        "not_checked",
+        "concerns",
+        "missing_context"
       ],
       "properties": {
         "status": {
           "type": "string",
           "enum": [
             "DONE",
-            "BLOCKER"
+            "DONE_WITH_CONCERNS",
+            "NEEDS_CONTEXT",
+            "BLOCKED"
           ]
         },
         "wp": {
@@ -213,6 +233,36 @@
               }
             }
           }
+        },
+        "not_checked": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "concerns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "missing_context": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "what",
+            "section"
+          ],
+          "properties": {
+            "what": {
+              "type": "string"
+            },
+            "section": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -220,7 +270,9 @@
       "type": "object",
       "required": [
         "status",
-        "findings"
+        "findings",
+        "needs_validation",
+        "not_checked"
       ],
       "properties": {
         "status": {
@@ -239,7 +291,9 @@
               "wp",
               "file",
               "problem",
-              "evidence"
+              "evidence",
+              "fix",
+              "if_skipped"
             ],
             "properties": {
               "severity": {
@@ -264,6 +318,59 @@
                 "type": "string"
               },
               "evidence": {
+                "type": "string"
+              },
+              "fix": {
+                "type": "string"
+              },
+              "if_skipped": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "not_checked": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "needs_validation": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "wp",
+              "file",
+              "kind",
+              "claim",
+              "fact",
+              "how_to_check"
+            ],
+            "properties": {
+              "wp": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "external",
+                  "unchanged_code"
+                ]
+              },
+              "claim": {
+                "type": "string"
+              },
+              "fact": {
+                "type": "string"
+              },
+              "how_to_check": {
                 "type": "string"
               }
             }
@@ -298,7 +405,8 @@
         "status",
         "plan",
         "defects",
-        "gaps"
+        "gaps",
+        "needs_validation"
       ],
       "properties": {
         "status": {
@@ -325,7 +433,9 @@
               "wp",
               "kind",
               "section",
-              "repro"
+              "repro",
+              "fix",
+              "if_skipped"
             ],
             "properties": {
               "id": {
@@ -355,6 +465,12 @@
               },
               "repro": {
                 "type": "string"
+              },
+              "fix": {
+                "type": "string"
+              },
+              "if_skipped": {
+                "type": "string"
               }
             }
           }
@@ -363,6 +479,47 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "needs_validation": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "wp",
+              "file",
+              "kind",
+              "claim",
+              "fact",
+              "how_to_check"
+            ],
+            "properties": {
+              "wp": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "external",
+                  "unchanged_code"
+                ]
+              },
+              "claim": {
+                "type": "string"
+              },
+              "fact": {
+                "type": "string"
+              },
+              "how_to_check": {
+                "type": "string"
+              }
+            }
           }
         }
       }

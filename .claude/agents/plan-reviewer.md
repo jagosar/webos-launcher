@@ -26,7 +26,8 @@ You have not seen the conversation in which `architecture.md` was designed, and 
 9. **Existing code context (if any):** open the references of section 4b and of "Patterns to mirror". Do they say what the plan claims? Is a pattern missing that a WP will need? Is there an obvious *gotcha* in that code the plan does not capture?
 10. **Baseline:** do the `verify` commands cover the existing suite, so a regression is detected?
 11. **Stack and rules:** does the manifest's `stack` cover the languages the WPs will write? Compare it with `python3 .claude/bin/agentic.py stack`. Does section 7 contradict any rule in `.claude/rules-library/` without saying so?
-12. **Documentation:** if there is a `docs` section, does its zone avoid overlapping any WP's and cover what the user will read (README, CHANGELOG)?
+12. **Briefs:** does every WP have a `#### WP-NN · <goal>` heading and every AC a `- AC-NNN · <title>` line? `agentic.py briefs` cuts at those lines; without them every agent reads the whole document.
+13. **Documentation:** if there is a `docs` section, does its zone avoid overlapping any WP's and cover what the user will read (README, CHANGELOG)?
 
 # Report (final answer, under 400 words)
 

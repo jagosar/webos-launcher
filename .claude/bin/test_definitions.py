@@ -18,18 +18,20 @@ COMMANDS_DIR = CLAUDE / "commands"
 WORKFLOW = CLAUDE / "workflows" / "agentic-implement.js"
 AGENTIC = CLAUDE / "bin" / "agentic.py"
 
-WRITE_TOOLS = {"Read", "Write", "Edit", "Glob", "Grep", "Bash"}
+# Every agent run-pipeline starts with --json-schema lists StructuredOutput: with a `tools:` list that leaves it out,
+# `claude -p --agent` (seen with CLI 2.1.316) returns no structured_output and the run stops with NO REPORT.
+WRITE_TOOLS = {"Read", "Write", "Edit", "Glob", "Grep", "Bash", "StructuredOutput"}
 # Each agent's contract: model (alias), exact tools, the ID it claims its zone with, and its report.
 AGENTS = {
-    "implementer": {"model": "sonnet", "tools": WRITE_TOOLS, "claim": "<WP-ID>", "status": "STATUS: DONE | BLOCKER"},
-    "test-author": {"model": "sonnet", "tools": WRITE_TOOLS, "claim": "AT", "status": "STATUS: DONE | BLOCKER"},
-    "qa": {"model": "sonnet", "tools": WRITE_TOOLS, "claim": "QA", "status": "STATUS: PASS | FAIL | BLOCKER"},
-    "reviewer": {"model": "sonnet", "tools": {"Read", "Glob", "Grep", "Bash"}, "claim": "REVIEW", "status": "STATUS: PASS | FAIL"},
-    "verifier": {"model": "sonnet", "tools": {"Read", "Glob", "Grep"}},
+    "implementer": {"model": "sonnet", "tools": WRITE_TOOLS, "claim": "<WP-ID>"},
+    "test-author": {"model": "sonnet", "tools": WRITE_TOOLS, "claim": "AT"},
+    "qa": {"model": "sonnet", "tools": WRITE_TOOLS, "claim": "QA"},
+    "reviewer": {"model": "sonnet", "tools": {"Read", "Glob", "Grep", "Bash", "StructuredOutput"}, "claim": "REVIEW"},
+    "verifier": {"model": "sonnet", "tools": {"Read", "Glob", "Grep", "StructuredOutput"}},
     "plan-reviewer": {"model": "opus", "tools": {"Read", "Glob", "Grep"}},
-    "test-auditor": {"model": "sonnet", "tools": {"Read", "Glob", "Grep"}},
+    "test-auditor": {"model": "sonnet", "tools": {"Read", "Glob", "Grep", "StructuredOutput"}},
     "gatekeeper": {"model": "haiku", "tools": {"Bash"}},
-    "doc-updater": {"model": "sonnet", "tools": WRITE_TOOLS, "claim": "DOCS", "status": "STATUS: DONE | BLOCKER"},
+    "doc-updater": {"model": "sonnet", "tools": WRITE_TOOLS, "claim": "DOCS"},
 }
 COMMANDS = {"architect": "opus", "implement": "sonnet"}
 # Manifest fields agentic.py understands: all must be documented in /architect.
@@ -68,8 +70,9 @@ def agentic_subcommands():
 
 class AgentDefinitionTests(unittest.TestCase):
     def test_every_agent_has_a_contract(self):
-        self.assertEqual({p.stem for p in AGENTS_DIR.glob("*.md")}, set(AGENTS),
-                         "every new agent needs its contract in this test")
+        # The flow's agents must all be there; a project may add its own (a WP's "agent").
+        self.assertLessEqual(set(AGENTS), {p.stem for p in AGENTS_DIR.glob("*.md")},
+                             "every agent of the flow needs its definition and its contract in this test")
 
     def test_frontmatter_model_and_tools(self):
         for name, spec in AGENTS.items():
@@ -102,15 +105,19 @@ class AgentDefinitionTests(unittest.TestCase):
                 body = frontmatter(AGENTS_DIR / f"{name}.md")[1]
                 self.assertIn(f"python3 .claude/bin/agentic.py claim {spec['claim']}", body)
 
-    def test_report_format_and_json_note(self):
-        for name, spec in AGENTS.items():
-            if "status" not in spec:
-                continue
+    def test_report_is_json_by_schema(self):
+        for name in ("implementer", "test-author", "test-auditor", "qa", "reviewer", "doc-updater"):
             with self.subTest(agent=name):
                 body = frontmatter(AGENTS_DIR / f"{name}.md")[1]
-                self.assertIn(spec["status"], body)
-                self.assertIn("JSON with a schema", body, "it must accept the workflow's structured format")
-                self.assertRegex(body, r"under \d+ words")
+                self.assertNotIn("STATUS:", body, "the text report format is gone: the launchers use a JSON schema")
+                report = body[body.index("# Report"):]
+                self.assertIn("schema", report)
+                self.assertRegex(report, r"under \d+ words")
+
+    def test_agents_that_get_a_brief_read_it(self):
+        for name in ("implementer", "test-author", "test-auditor"):
+            with self.subTest(agent=name):
+                self.assertIn("brief", frontmatter(AGENTS_DIR / f"{name}.md")[1])
 
     def test_qa_classifies_defects(self):
         body = (AGENTS_DIR / "qa.md").read_text(encoding="utf-8")
@@ -121,14 +128,105 @@ class AgentDefinitionTests(unittest.TestCase):
         body = (AGENTS_DIR / "verifier.md").read_text(encoding="utf-8")
         self.assertIn("Uncertainty never downgrades a blocker", body)
 
+    def test_judges_share_severity_anchors_and_needs_validation(self):
+        for name in ("reviewer", "qa"):
+            body = (AGENTS_DIR / f"{name}.md").read_text(encoding="utf-8")
+            for phrase in ("# Severity anchors", "fully defeat an explicit control", "the severity is lower than it feels",
+                           "# Needs validation", "unchanged_code", "never blocks"):
+                with self.subTest(agent=name, phrase=phrase):
+                    self.assertIn(phrase, body)
+
+    def test_reviewer_reads_the_callers_outside_the_diff(self):
+        body = (AGENTS_DIR / "reviewer.md").read_text(encoding="utf-8")
+        for phrase in ("the callers your prompt lists", "Read each one and check that the change keeps it working",
+                       "a caller your prompt lists that the change breaks"):
+            self.assertIn(phrase, body)
+
+    def test_findings_have_four_parts(self):
+        self.assertIn("No concrete case, no finding", (AGENTS_DIR / "reviewer.md").read_text(encoding="utf-8"))
+        for name in ("reviewer", "qa"):
+            body = (AGENTS_DIR / f"{name}.md").read_text(encoding="utf-8")
+            report = body[body.index("# Report"):]
+            for field in ("`fix`", "`if_skipped`", "`needs_validation`"):
+                with self.subTest(agent=name, field=field):
+                    self.assertIn(field, report)
+
+    def test_reports_say_what_was_not_checked(self):
+        for name in ("implementer", "test-author", "test-auditor", "reviewer"):
+            with self.subTest(agent=name):
+                body = (AGENTS_DIR / f"{name}.md").read_text(encoding="utf-8")
+                self.assertIn("`not_checked`", body[body.index("# Report"):])
+
+    def test_implementer_reuses_before_writing(self):
+        body = (AGENTS_DIR / "implementer.md").read_text(encoding="utf-8")
+        for phrase in ("# Before writing", "already in this codebase", "standard library", "grep every caller", "root cause"):
+            self.assertIn(phrase, body)
+        common = (RULES_LIBRARY / "common.md").read_text(encoding="utf-8")
+        for phrase in ("already in this codebase", "every caller"):
+            self.assertIn(phrase, common)
+
+    def test_test_auditor_knows_tautological_tests(self):
+        body = (AGENTS_DIR / "test-auditor.md").read_text(encoding="utf-8")
+        for phrase in ("Tautological", "passes by construction"):
+            self.assertIn(phrase, body)
+
+    def test_nothing_invented_in_docs_and_plans(self):
+        self.assertIn("numbers included", (AGENTS_DIR / "doc-updater.md").read_text(encoding="utf-8"))
+        architect = (COMMANDS_DIR / "architect.md").read_text(encoding="utf-8")
+        for phrase in ("No invented figures", "not measured"):
+            self.assertIn(phrase, architect)
+
+    def test_architect_sequences_wide_refactors(self):
+        doc = (COMMANDS_DIR / "architect.md").read_text(encoding="utf-8")
+        parallelism = doc[doc.index("## Parallelism"):doc.index("## 2b.")]
+        self.assertIn("expand-contract", parallelism)
+
+    def test_implement_presents_needs_validation_and_not_checked(self):
+        doc = (COMMANDS_DIR / "implement.md").read_text(encoding="utf-8")
+        for phrase in ("Needs validation", "not_checked"):
+            self.assertIn(phrase, doc)
+
+    def test_implementer_has_four_statuses_and_knows_the_gate(self):
+        body = (AGENTS_DIR / "implementer.md").read_text(encoding="utf-8")
+        self.assertIn("# Statuses", body)
+        for status in ("`DONE`", "`DONE_WITH_CONCERNS`", "`NEEDS_CONTEXT`", "`BLOCKED`"):
+            self.assertIn(status, body)
+        self.assertNotRegex(body, r"\bBLOCKER\b", "BLOCKER is no longer an implementer status")
+        for phrase in ("# The gate", "twice at most", "never retry the same approach"):
+            self.assertIn(phrase, body)
+        report = body[body.index("# Report"):]
+        for field in ("`concerns`", "`missing_context`", "`blocker`"):
+            self.assertIn(field, report)
+
+    def test_implement_presents_concerns_and_gate_denials(self):
+        doc = (COMMANDS_DIR / "implement.md").read_text(encoding="utf-8")
+        for phrase in ("`concern`", "`gate_denials`", "DONE_WITH_CONCERNS"):
+            self.assertIn(phrase, doc)
+
     def test_gatekeeper_only_agentic(self):
         body = (AGENTS_DIR / "gatekeeper.md").read_text(encoding="utf-8")
         self.assertIn("python3 .claude/bin/agentic.py", body)
 
+    def test_gatekeeper_does_not_poll_for_long_commands(self):
+        # A `pgrep -f` wait loop matches its own command line and never ends: the stall seen at close-stage.
+        body = (AGENTS_DIR / "gatekeeper.md").read_text(encoding="utf-8")
+        section = body.split("# Long commands", 1)[1]
+        for rule in ("timeout: 1800000", "Do not use `run_in_background`", "Never write a wait loop",
+                     "`pgrep -f`", "`exit_code: 124`", "do not run the command again"):
+            self.assertIn(rule, section)
+
+
+    def test_gatekeeper_never_guesses_the_exit_code(self):
+        # Bash shows "Exit code N" only when N is not 0; a gatekeeper that took the code from the output stopped a
+        # run at a baseline that had exited 0.
+        body = (AGENTS_DIR / "gatekeeper.md").read_text(encoding="utf-8")
+        for rule in ("no `Exit code` line", "`exit_code: 0`", "Never deduce the exit code from the output"):
+            self.assertIn(rule, body)
 
 class CommandAndWorkflowTests(unittest.TestCase):
     def test_commands_and_models(self):
-        self.assertEqual({p.stem for p in COMMANDS_DIR.glob("*.md")}, set(COMMANDS))
+        # The flow's commands must all be there; a project may add its own.
+        self.assertLessEqual(set(COMMANDS), {p.stem for p in COMMANDS_DIR.glob("*.md")})
         for name, model in COMMANDS.items():
             with self.subTest(command=name):
                 self.assertEqual(frontmatter(COMMANDS_DIR / f"{name}.md")[0].get("model"), model)
@@ -293,6 +391,8 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(fm.get("model"), "sonnet")
         self.assertIn('python3 "${CLAUDE_PLUGIN_ROOT}/.claude/bin/agentic.py" install', body)
         self.assertIn("Do not commit or push", body)
+        for flag in ("--dry-run", "--force", "--allow-dirty"):
+            self.assertIn(flag, fm.get("argument-hint", ""))
 
     def test_what_is_installed_exists(self):
         src = AGENTIC.read_text(encoding="utf-8")

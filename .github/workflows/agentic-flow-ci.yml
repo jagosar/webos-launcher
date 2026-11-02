@@ -5,10 +5,15 @@
 # persisted in the checkout, nothing third-party installed, bounded concurrency and timeout.
 name: agentic-flow-ci
 on:
+  # Pushes to other branches are covered by their pull request: running both doubled the jobs (and the scarce macOS
+  # runners) for every change.
   push:
-    paths: [".claude/**", ".claude-plugin/**", "plugin/**", "docs/**", "*.md", ".github/workflows/agentic-flow-ci.yml"]
+    branches: [main]
+    paths: [".claude/**", ".claude-plugin/**", "plugin/**", "docs/**", "*.md", ".github/workflows/agentic-flow-ci.yml", "bench/**", ".github/workflows/agentic-bench.yml"]
   pull_request:
-    paths: [".claude/**", ".claude-plugin/**", "plugin/**", "docs/**", "*.md", ".github/workflows/agentic-flow-ci.yml"]
+    paths: [".claude/**", ".claude-plugin/**", "plugin/**", "docs/**", "*.md", ".github/workflows/agentic-flow-ci.yml", "bench/**", ".github/workflows/agentic-bench.yml"]
+  # The full matrix on demand, for a pull request that touches platform code (Actions tab, "Run workflow").
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,12 +25,23 @@ concurrency:
 jobs:
   test:
     if: github.repository == 'jagosar/agentic-flow'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ${{ matrix.os }}
+    # Windows is slower at starting processes and running git, and this suite is mostly subprocesses.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 15 }}
     strategy:
       fail-fast: false
+      # The repository is public, so GitHub-hosted runners cost nothing: every pull request runs the full matrix.
+      # (While it was private, a Windows minute counted double and a macOS minute ten times, and the full matrix on
+      # every push used 1,860 of the 2,000 included minutes in one day: pull requests then ran Linux only.)
       matrix:
+        os: [ubuntu-latest]
         python: ["3.9", "3.12", "3.14"]
+        include:
+          - {os: windows-latest, python: "3.12"}
+          - {os: macos-latest, python: "3.12"}
+    defaults:
+      run:
+        shell: bash  # Git Bash on Windows, as Claude Code uses there
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -41,7 +57,23 @@ jobs:
       - name: Workflow scenarios (simulated agents)
         run: node .claude/bin/test_workflow.mjs
       - name: Guardrails, commands and definitions
-        run: python -m unittest discover -s .claude/bin -p "test_*.py" -v
+        run: |
+          set -o pipefail
+          python -m unittest discover -s .claude/bin -p "test_*.py" -v 2>&1 | tee "$RUNNER_TEMP/unittest.txt"
+          # The other suites exist in agentic-flow itself; install copies this workflow into template copies that
+          # may not have them, so a missing folder is skipped instead of failing the job.
+          suite() { [ -d "$1" ] || { echo "skipped: no $1/"; return 0; }; shift; "$@" 2>&1 | tee -a "$RUNNER_TEMP/unittest.txt"; }
+          suite bench python -m unittest discover -s bench -p "test_*.py" -v
+          suite bench/acceptance python -m unittest discover -s bench/acceptance -v
+          suite acceptance python -m unittest discover -s acceptance -v
+          suite qa python -m unittest discover -s qa -v
+      # The failures as one annotation, readable on the pull request and through the API without the full log.
+      - name: Failures as an annotation
+        if: failure()
+        run: |
+          detail=$(tr -d '\r' < "$RUNNER_TEMP/unittest.txt" | sed -n '/^=\{20,\}$/,/^Ran /p' | head -c 3500)
+          detail=${detail//'%'/'%25'}
+          echo "::error title=unittest failures::${detail//$'\n'/'%0A'}"
 
   plugin:
     if: github.repository == 'jagosar/agentic-flow'

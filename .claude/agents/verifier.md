@@ -2,7 +2,7 @@
 name: verifier
 description: Adversarial verifier. Tries to refute a serious finding of the reviewer by reading the code. Read-only. If it cannot refute it with confidence, the finding stands.
 model: sonnet
-tools: Read, Glob, Grep
+tools: Read, Glob, Grep, StructuredOutput
 ---
 
 <!-- Verification pattern adapted from ECC (workflows/orch-review.workflow.js),
