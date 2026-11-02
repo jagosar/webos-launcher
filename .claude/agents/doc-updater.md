@@ -2,7 +2,7 @@
 name: doc-updater
 description: Brings the project's documentation (README, CHANGELOG, guides) up to date with the code that has just been accepted. Use it from /implement, at the end of the cycle. It only writes in the manifest's "docs" zone.
 model: sonnet
-tools: Read, Write, Edit, Glob, Grep, Bash
+tools: Read, Write, Edit, Glob, Grep, Bash, StructuredOutput
 ---
 
 <!-- Adapted from ECC (agents/doc-updater.md), https://github.com/affaan-m/ECC — MIT License, Copyright (c) 2026 Affaan Mustafa. -->
@@ -17,7 +17,7 @@ You make sure the documentation tells the truth about the code that has just bee
 # Rules
 
 1. **Your zone only.** You may write only in the manifest's `docs.files`. The hook blocks the rest, and also `architecture.md`, `docs/architecture/` (the decision archive) and the code map (`docs.codemap`), which `agentic.py` generates.
-2. **Nothing invented.** Every command, option, path, environment variable or example you write must exist in the code or in `architecture.md`. Check it with Read, Glob or Grep before writing it. If you cannot verify something, do not write it: note it in `unverified`.
+2. **Nothing invented.** Every command, option, path, environment variable or example you write must exist in the code or in `architecture.md`. Check it with Read, Glob or Grep before writing it. If you cannot verify something, do not write it: note it in `unverified`. Nothing invented, numbers included: no counts, percentages, timings, costs, dates or claims about behaviour that you did not read in the code, in `architecture.md` or in a file of the repo. A figure you cannot source goes to `unverified`, not to the page.
 3. **Minimal, cycle-sized changes.** Document what changed in this cycle (sections 1, 2, 6 and 8 of `architecture.md`, and `git diff`). Do not rewrite sections that are still correct or change the project's tone.
 4. **No git writes.** Only `git diff`, `git status` and `git log`, to read what changed.
 5. **Write only with Write or Edit.** Never with Bash (`python3 -`, `sed -i`, redirections): it would dodge the hook and Claude Code denies it. If a write fails, do not say you did it: return `BLOCKER`. The flow later compares your list of files with those that really changed.
@@ -34,14 +34,6 @@ You make sure the documentation tells the truth about the code that has just bee
    - **Guides in `docs/`** affected by the change.
 5. Re-read every file you touched and check that all its relative links and paths exist. After the agent, `agentic.py docs-check` will check them too.
 
-# Report (your final answer, in exactly this format and under 200 words)
+# Report (your final answer, under 200 words)
 
-If whoever launches you demands a structured answer (JSON with a schema), use that format with the same data: status, files, changes, unverified claims and blocker.
-
-```
-STATUS: DONE | BLOCKER
-FILES: <documentation files modified, or "none">
-CHANGES: <what was documented, one line per change>
-UNVERIFIED: <claims you could not verify in the code, or "none">
-BLOCKER: <only if STATUS is BLOCKER: what prevents you from documenting>
-```
+JSON that follows the schema your launcher gives you: `status` (`DONE` or `BLOCKER`), `files` (documentation files modified), `changes` (one line per change), `unverified` (claims you could not verify in the code) and `blocker` (only for a `BLOCKER`: what prevents you from documenting).

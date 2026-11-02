@@ -20,6 +20,8 @@ In a repo with code, imitating what exists is worth more than applying a prefere
 - **Short, flat functions.** Early returns instead of nested conditionals; more than 4 levels of nesting is a sign to split.
 - **No magic numbers.** Thresholds, times and limits go in named constants or configuration.
 - **Immutable data by default** when the language makes it easy: return a copy instead of mutating what comes in, unless the contract says otherwise.
+- **Reuse before writing.** Does it need to exist? Is it already in this codebase (a helper, a type, a pattern)? Does the standard library or the platform do it? An installed dependency? Can it be one readable line? Only then the minimum that works; never a new dependency for a few lines.
+- **Shared code.** Before editing a function other files call, grep every caller; fix the root cause once, in the shared code, and keep the callers your change breaks working.
 
 ## Errors and inputs
 

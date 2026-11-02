@@ -96,6 +96,8 @@ The flow's goal is for several implementers to work at once. A chain of one-WP w
 - **Split:** prefer vertical slices or modules of similar size. A wave takes as long as its slowest WP.
 - **By signature or by implementation:** in section 8, each WP says which contracts it consumes by signature (same wave) and which by implementation (earlier waves, in `depends_on`).
 
+**Wide refactors.** A mechanical change whose blast radius spans the codebase (a rename, a retyped shared symbol) cannot land green as one WP. Sequence it as expand-contract: one WP adds the new form beside the old; migration WPs move callers in batches sized by blast radius, each green on its own; a last WP deletes the old form once no caller remains. The batches may share a wave only if they touch disjoint files.
+
 ## 2b. Confirm before writing (the model gate)
 
 Before you write a new `architecture.md`, or replace an existing one, stop and ask the user with the AskUserQuestion tool. This is mandatory at every size, even when the interview had no rounds. The frontmatter asks for the latest Opus, but the session may be running another model, and the user must be able to switch before the design is written.
@@ -148,7 +150,7 @@ Style, naming, error handling, logging, commit format, what is forbidden. The ag
 
 ## 8. Work packages and acceptance criteria
 ### Acceptance criteria
-One block per criterion:
+One block per criterion, starting with exactly `- AC-NNN · <title>` (the briefs are cut at those lines):
 - AC-001 · <title>
   - Scenario: <starting state>
   - Action: <what happens, through which contract of section 6>
@@ -159,8 +161,8 @@ One block per criterion:
 No vague words ("correctly", "fast"): everything must be checkable with a command.
 
 ### Work packages
-For each WP:
-- ID, wave, goal.
+For each WP, a heading `#### WP-NN · <goal>` (what lets `agentic.py briefs` give each implementer only its own slice), followed by:
+- Wave.
 - Files it owns.
 - Contracts it implements and consumes (by signature or by implementation).
 - ACs it answers for.
@@ -183,6 +185,8 @@ Every decision, with the discarded alternative and the reason, including those y
 ## 11. Risks and open questions
 What is not settled. If something blocks a WP, that WP is not ready. In a large size, include the rollback plan.
 ```
+
+No invented figures: every number in the document (costs, times, counts, limits, line ranges) comes from a command you ran or a file you read; what you did not measure is written as "not measured".
 
 At the end of section 8 goes the manifest the guardrails read. It is mandatory and carries the exact label `json wp-manifest`:
 

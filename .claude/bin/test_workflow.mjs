@@ -23,6 +23,7 @@ async function simulate(scenario = {}, args = {}) {
   let reviewRound = 0
   let qaRound = 0
   let auditRound = 0
+  const implCalls = {}
   const respond = cmd => {
     executed.push(cmd)
     const forced = scenario.gate && scenario.gate(cmd)
@@ -32,6 +33,7 @@ async function simulate(scenario = {}, args = {}) {
     if (cmd === 'baseline') return { exit_code: 0, output: JSON.stringify({ phases: [{ name: 'tests', passed: true }], preexisting_failures: [] }) }
     if (cmd === 'codemap') return { exit_code: 0, output: JSON.stringify({ path: 'docs/CODEMAP.md', files: 3, changed: true }) }
     if (cmd === 'docs-check') return { exit_code: 0, output: JSON.stringify({ ok: true, checked: 2, broken: [] }) }
+    if (cmd === 'callers') return { exit_code: 0, output: JSON.stringify({ changed: [], symbols: {}, callers: [], truncated: false }) }
     return { exit_code: 0, output: 'RESULTADO: OK' }
   }
   const agent = async (prompt, opts) => {
@@ -41,6 +43,9 @@ async function simulate(scenario = {}, args = {}) {
       case 'gatekeeper': {
         gateCalls += 1
         const cmd = prompt.split('agentic.py ')[1].trim()
+        const cmds = cmd.startsWith('seq ') ? cmd.slice(4).split(' + ') : [cmd]
+        // A lost gatekeeper call: a timeout or a dead agent, so the script gets nothing back.
+        if ((scenario.lost || []).some(prefix => cmds.some(c => c.startsWith(prefix)))) throw new Error('gatekeeper returned nothing')
         if (!cmd.startsWith('seq ')) return respond(cmd)
         if (scenario.garble) return { exit_code: 0, output: 'sorry, here is a summary instead' }
         const steps = []
@@ -59,16 +64,26 @@ async function simulate(scenario = {}, args = {}) {
         return scenario.audit ? scenario.audit(auditRound) : { status: 'PASS', findings: [] }
       case 'implementer': {
         const wp = opts.label.split(' ')[0]
-        return { status: 'DONE', wp, files: [], checks: [], internal_decisions: [], blocker: null }
+        const base = { status: 'DONE', wp, files: [], checks: [], internal_decisions: [], blocker: null, not_checked: [], concerns: [], missing_context: null }
+        let extra = scenario.reports && scenario.reports.implementer && scenario.reports.implementer[wp]
+        if (Array.isArray(extra)) {  // one override per call of that package: the first, then the last
+          implCalls[wp] = (implCalls[wp] || 0) + 1
+          extra = pickRound(extra, implCalls[wp])
+        }
+        return extra ? { ...base, ...extra } : base
       }
-      case 'reviewer':
+      case 'reviewer': {
         reviewRound += 1
-        return scenario.review ? scenario.review(reviewRound) : { status: 'PASS', findings: [] }
+        const r = scenario.review ? scenario.review(reviewRound) : { status: 'PASS', findings: [] }
+        return scenario.reports && scenario.reports.reviewer ? { ...r, ...scenario.reports.reviewer } : r
+      }
       case 'verifier':
         return scenario.verifier || { is_real: true, confidence: 0.9, reasoning: 'it holds' }
-      case 'qa':
+      case 'qa': {
         qaRound += 1
-        return scenario.qa ? scenario.qa(qaRound) : { status: 'PASS', plan: ['contracts'], defects: [], gaps: [] }
+        const q = scenario.qa ? scenario.qa(qaRound) : { status: 'PASS', plan: ['contracts'], defects: [], gaps: [] }
+        return scenario.reports && scenario.reports.qa ? { ...q, ...scenario.reports.qa } : q
+      }
       case 'doc-updater':
         return scenario.docs || { status: 'DONE', files: ['README.md', 'CHANGELOG.md'], changes: ['usage of the new command'], unverified: [], blocker: null }
       default:
@@ -166,13 +181,13 @@ test('a design defect: not fixed in a loop, returned as pending', async () => {
 test('refactor: no test-author, the existing suite is the baseline', async () => {
   const { calls, gates } = await simulate({ plan: { type: 'refactor' } })
   assert.ok(!calls.some(c => c.type === 'test-author'))
-  assert.equal(gates[1], 'baseline')
-  assert.equal(gates[2], 'acceptance --expect green')
+  assert.equal(gates[3], 'baseline')
+  assert.equal(gates[4], 'acceptance --expect green')
 })
 
 test('baseline: goes before wave 0 and its result is saved', async () => {
   const { result, gates } = await simulate()
-  assert.equal(gates[1], 'baseline')
+  assert.equal(gates[3], 'baseline')
   assert.ok(gates.indexOf('baseline') < gates.indexOf('open-stage acceptance'))
   assert.deepEqual(result.baseline.preexisting_failures, [])
 })
@@ -185,10 +200,11 @@ test('baseline with a pre-existing failure: does not block; a command that canno
   assert.equal(broken.result.failed_stage, 'baseline')
 })
 
-test('pipeline-plan and the baseline travel in one gatekeeper call', async () => {
+test('pipeline-plan and the briefs travel in one gatekeeper call; the baseline goes next, alone', async () => {
   const { calls } = await simulate()
-  const first = calls.find(c => c.type === 'gatekeeper')
-  assert.ok(first.prompt.endsWith('agentic.py seq pipeline-plan + baseline'))
+  const [first, second] = calls.filter(c => c.type === 'gatekeeper')
+  assert.ok(first.prompt.endsWith('agentic.py seq hooks-check + pipeline-plan + briefs'))
+  assert.ok(second.prompt.endsWith('agentic.py baseline'))
 })
 
 test('start_wave: skips the baseline, wave 0 and earlier waves', async () => {
@@ -284,15 +300,42 @@ test('language rules: reach the agents that write or judge code', async () => {
 })
 
 
-test('gatekeeper calls are batched: close-stage travels with the next open-stage, and verify with the last wave', async () => {
+test('gatekeeper calls are batched: close-stage travels with the next open-stage', async () => {
   const { gates, gateCalls } = await simulate()
-  assert.equal(gateCalls, 8, `a run with two waves needs 8 gatekeeper calls, not one per command (${gates.length} commands)`)
+  assert.equal(gateCalls, 10, `a run with two waves needs 10 gatekeeper calls, not one per command (${gates.length} commands)`)
   assert.deepEqual(gates, [
-    'pipeline-plan', 'baseline', 'open-stage acceptance', 'close-stage acceptance AT=done --expect red', 'open-stage 1',
+    'hooks-check', 'pipeline-plan', 'briefs', 'baseline', 'open-stage acceptance', 'close-stage acceptance AT=done --expect red', 'open-stage 1',
     'close-stage 1 WP-01=done WP-02=done', 'open-stage 2',
-    'close-stage 2 WP-03=done', 'verify', 'open-stage review',
+    'close-stage 2 WP-03=done', 'verify', 'open-stage review', 'callers',
     'close-stage review REVIEW=pass', 'open-stage qa', 'close-stage qa QA=pass',
   ])
+})
+
+test('baseline and verify run the whole suite: each travels without another long command', async () => {
+  // One Bash call per long command keeps each within the gatekeeper's timeout; bundling them could exceed it.
+  const { calls } = await simulate()
+  const prompts = calls.filter(c => c.type === 'gatekeeper').map(c => c.prompt.split('agentic.py ')[1])
+  const withBaseline = prompts.filter(p => /(^|[ +])baseline( |$)/.test(p))
+  const withVerify = prompts.filter(p => /(^|[ +])verify( |$)/.test(p))
+  assert.deepEqual(withBaseline, ['baseline'])
+  assert.deepEqual(withVerify, ['seq verify + open-stage review + callers'])
+})
+
+test('briefs that cannot be written stop the run before anything starts', async () => {
+  const { result, calls } = await simulate({ gate: cmd => (cmd === 'briefs' ? { exit_code: 1, output: 'boom' } : null) })
+  assert.equal(result.failed_stage, 'prepare')
+  assert.equal(result.detail, 'briefs failed')
+  assert.equal(calls.filter(c => c.type !== 'gatekeeper').length, 0)
+})
+
+test('agents read their brief, the judges the whole document', async () => {
+  const { calls } = await simulate({ review: round => (round === 1 ? { status: 'FAIL', findings: [grave('WP-02')] } : { status: 'PASS', findings: [] }), plan: { docs: true, codemap: 'docs/CODEMAP.md' } })
+  const prompt = type => calls.find(c => c.type === type).prompt
+  assert.ok(prompt('implementer').includes('.claude/state/briefs/WP-01.md'))
+  assert.ok(prompt('test-author').includes('.claude/state/briefs/AT.md'))
+  assert.ok(prompt('test-auditor').includes('.claude/state/briefs/AT.md'))
+  assert.ok(calls.find(c => c.label === 'WP-02 (fix)').prompt.includes('.claude/state/briefs/WP-02.md'))
+  for (const type of ['reviewer', 'qa', 'verifier', 'doc-updater']) assert.ok(!prompt(type).includes('briefs/'), type)
 })
 
 test('a garbled gatekeeper reply is never retried and stops the run', async () => {
@@ -423,12 +466,14 @@ function fromDecl(d) {
       }
       return null
     },
+    lost: d.gate_lost,
     testAuthor: d.test_author,
     audit: d.audit ? round => pickRound(d.audit, round) : undefined,
     review: d.review ? round => pickRound(d.review, round) : undefined,
     qa: d.qa ? round => pickRound(d.qa, round) : undefined,
     verifier: d.verifier,
     docs: d.docs,
+    reports: d.reports,
   }
 }
 const summarize = ({ result, calls, gates, gateCalls }) => {
@@ -442,16 +487,21 @@ const summarize = ({ result, calls, gates, gateCalls }) => {
     agents.push(key)
   }
   return {
-    result: result.result, failed_stage: result.failed_stage ?? null, fix_cycles: result.fix_cycles,
+    result: result.result, failed_stage: result.failed_stage ?? null, detail: result.detail ?? null, fix_cycles: result.fix_cycles,
     pending: (result.pending || []).map(p => p.type).sort(), gates, gate_calls: gateCalls, agents: agents.sort(), prompts,
+    not_checked: (result.not_checked || []).map(e => `${e.agent}:${e.label}`).sort(),
+    gate_denials: result.gate_denials || {},
+    review_callers: (result.review && result.review.callers) || 0,
+    verification_failures: (result.verification_failures || []).length,
   }
 }
 if (process.argv.includes('--dump')) {
   const out = {}
   for (const d of conformance.scenarios) out[d.name] = summarize(await simulate(fromDecl(d), d.args || {}))
-  console.log(JSON.stringify(out))
-  process.exit(0)
-}
+  // No process.exit: past 64 KB a pipe would be cut before stdout drains; the process ends when the write is done.
+  process.stdout.write(JSON.stringify(out) + '\n')
+} else {
+
 
 test('the schemas of the workflow are the ones in pipeline-spec.json', async () => {
   const { schemas } = await simulate({ plan: { docs: true, codemap: 'docs/CODEMAP.md' } })
@@ -480,6 +530,45 @@ test('every conformance scenario ends as described in its name', async () => {
   assert.equal((await run1('verification fails on a package: it is fixed and verified again')).fix_cycles, 1)
   assert.equal((await run1('the test-auditor returns nothing')).failed_stage, 'wave 0')
   assert.equal((await run1('the fix limit is per package')).result, 'REVIEW')
+  const once = await run1('a package at its fix limit is listed once')
+  assert.deepEqual(once.pending, ['fix limit reached'], 'listed once, not once per cycle')
+  assert.deepEqual((await run1('a design defect survives a later verification failure')).pending, ['design', 'fix limit reached'])
+  assert.ok((await run1('a documentation check that cannot run is reported')).pending.includes('documentation'))
+  const needs = await run1('needs validation goes to pending and does not block')
+  assert.deepEqual([needs.result, needs.pending], ['OK', ['needs validation', 'needs validation']])
+  assert.deepEqual((await run1('not_checked is collected from every report')).not_checked, ['implementer:WP-02', 'reviewer:reviewer'])
+  assert.deepEqual((await run1('gate denials are summed from close-stage')).gate_denials, { 'WP-01': 1 })
+  const concerns = await run1('concerns go to pending and to the reviewer')
+  assert.deepEqual([concerns.result, concerns.pending], ['OK', ['concern']])
+  assert.ok(concerns.prompts['reviewer:reviewer#1'].includes('may spin'))
+  const ctxOnce = await run1('needs context is re-dispatched once with the whole document')
+  assert.deepEqual([ctxOnce.result, ctxOnce.agents.filter(a => a === 'implementer:WP-02 (context)').length], ['OK', 1])
+  const twice = await run1('needs context twice is a blocker')
+  assert.deepEqual([twice.result, twice.failed_stage, twice.agents.filter(a => a === 'implementer:WP-02 (context)').length], ['REVIEW', 'wave 1', 1])
+  const inFix = await run1('needs context in a fix wave is a blocker')
+  assert.deepEqual([inFix.result, inFix.failed_stage, inFix.agents.filter(a => a.includes('(context)')).length], ['REVIEW', 'fix wave 1', 0])
+  const reached = await run1('callers reach the reviewer')
+  assert.equal(reached.review_callers, 1)
+  assert.ok(reached.prompts['reviewer:reviewer#1'].includes('src/b/x.py'))
+  const ignoredCallers = await run1('callers that are not JSON are ignored')
+  assert.equal(ignoredCallers.review_callers, 0)
+  for (const [name, count] of [['verification fails on a package: it is fixed and verified again', 1], ['verification never gets fixed', 3], ['verification fails with no owner', 1], ['happy path', 0]]) {
+    assert.equal((await run1(name)).verification_failures, count, name)
+  }
+  assert.ok(!ignoredCallers.prompts['reviewer:reviewer#1'].includes('Callers'))
+  const odd = await run1('a finding on an unknown package named like a built-in goes to no WP')
+  assert.deepEqual([odd.result, odd.pending], ['REVIEW', ['no WP']])
+  const asText = await run1('start_wave given as text works like a number')
+  assert.ok(!asText.gates.includes('baseline'))
+  assert.deepEqual(asText.agents.filter(a => a.startsWith('implementer')), ['implementer:WP-03'])
+  // A lost gatekeeper call is reported as such, not as blockers, an ownership breach or an unowned failure.
+  for (const [name, stage] of [['a lost gatekeeper call at the baseline stops the run', 'baseline'],
+    ['a lost gatekeeper call when closing the last wave stops the run', 'wave 2'],
+    ['a lost gatekeeper call at verification stops the run', 'verification']]) {
+    const r = await run1(name)
+    assert.equal(r.failed_stage, stage, name)
+    assert.match(r.detail || '', /^the gatekeeper returned no usable result/, name)
+  }
 })
 
 let failed = 0
@@ -494,3 +583,4 @@ for (const { name, fn } of tests) {
 }
 console.log(`\n${tests.length - failed}/${tests.length} scenarios OK`)
 process.exit(failed ? 1 : 0)
+}
