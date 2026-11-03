@@ -65,6 +65,12 @@ NOTES = {
         "(GUARDRAIL HOOK SAW NO FLOW AGENT): the hook did not guard those writes. If it repeats in every stage of the "
         "native workflow, use /implement fallback and report the agent_type recorded in hook-seen.json.",
     ],
+    "2.4.1": [
+        "The fix-cycle prompt and implementer.md say that a caller outside every package that a change breaks is "
+        "kept working from the changed package's files (a default for a new parameter, a wrapper), and that BLOCKED "
+        "is only for when no compatible change exists or section 6 explicitly forbids it. A customised "
+        "implementer.md keeps the old wording: merge the two sentences.",
+    ],
     "2.2.0": [
         "The reviewer reads beyond the diff: a deterministic `callers` step lists, for every public symbol defined "
         "in a changed file (the code map's regexes, ten languages), the lines of tracked code outside the diff that "

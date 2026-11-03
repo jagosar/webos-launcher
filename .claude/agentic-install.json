@@ -1,11 +1,11 @@
 {
-  "version": "2.4.0",
+  "version": "2.4.1",
   "files": {
     ".claude-plugin/marketplace.json": "e55cbca98bd40792111419495f7083497d9a762302882ab9dc1ec1ca4ac9ce6f",
-    ".claude-plugin/plugin.json": "67b76aee549cfe075b57c5ad94448cd30cc324f42172f2a148d294d989d51b2f",
+    ".claude-plugin/plugin.json": "82125eba7570453ea1a574b640c7c9b3e5234c698e01002c8b867fe6698f80ad",
     ".claude/agents/doc-updater.md": "ad9e2ed1bf8a0e9af6fc4882b21bc2a32a6fd5c6ea13c6d8489a26f09669ccbc",
     ".claude/agents/gatekeeper.md": "12eb714356bb8f7b97a02e395c2a88d0aee6bf2d79d640a466a57c2f4c441d70",
-    ".claude/agents/implementer.md": "a1bcb2b92b5ca891b1de60267a43df2ac16878fca1a4ca41b793a533b5ea6e4f",
+    ".claude/agents/implementer.md": "c9703f63aa5a3560438a1a2207e77be02e6f2ffe66cdb7b2e34711220765d452",
     ".claude/agents/plan-reviewer.md": "635d3d65d973d89b1c2afc36817f692e04c34f271fc326211af11dc986210ff6",
     ".claude/agents/qa.md": "159450172b2e5adfacfe4bea592c89cf4d8a8300d1f5fc52e64f47b2918e7f95",
     ".claude/agents/reviewer.md": "65b668614dc0e2463dd8deddf1931531d7704bfa22b2349493f472ef8f1eba80",
@@ -27,7 +27,7 @@
     ".claude/bin/test_waiting.py": "20935b2ee63a75f8c96d8d4ce3e691b97781de0c760f1cf402995b21c7cf5913",
     ".claude/bin/test_workflow.mjs": "eecb2bb66d07412481ccc16b64a36232bf95db6cd457ca74c4ba2b576bae3ed6",
     ".claude/bin/testutil.py": "57684b66734f03d9200bb2ec981f1fca78e3da26b965aec1a3ecaeab2db34233",
-    ".claude/bin/upgrade.py": "ef3a86b91eca10ea59fd54aa18be5ea76a22bd0e5217f8990377809fca9d3dc4",
+    ".claude/bin/upgrade.py": "48d492cfc70e04c6c71c04b8e02ebef72c2b7e07bfb451035bc44a9015699707",
     ".claude/bin/waiting.py": "837011d26e935b46d498a0973ceca38a0106dc6e1f6e88eb4c5936a631daf239",
     ".claude/commands/architect.md": "0550f2d7582245e1e9e377906b4a91788eef22117a1edd9ead72c50f5b80c0e6",
     ".claude/commands/implement.md": "685ace8c617b2732df6ba8e088a5fcd73138e5b4d77a155ced40cd5b1810b8b8",
@@ -42,8 +42,8 @@
     ".claude/rules-library/rust.md": "9cf3a147d8842add4d47ae1d18ee0d0782d5862d700fccb2ad0504fb2f3f5142",
     ".claude/rules-library/swift.md": "09004c229d4957d1880f6d0ac4da7ac1990b6c797924fb196ee59b427d1fae91",
     ".claude/rules-library/typescript.md": "a21bf03054d2c785019534e35f4498813fe8a03b803d9f52e1591c17b3772ca5",
-    ".claude/workflows/agentic-implement.js": "053b65390ed2c81da0ade2a56a84ccfa139ce5c90a7bb251f6ad6e4440bb9a81",
-    ".claude/workflows/pipeline-spec.json": "e0670074e70374acceb0efc3143a69d0acec977b123d7626b0c5be7bba4e20e2",
+    ".claude/workflows/agentic-implement.js": "a39f719fd32543249b7844457f8a01fe8095da2a437fe23530390bc30f9a9ccb",
+    ".claude/workflows/pipeline-spec.json": "a520d12d48997bb02ec2d4f6514d5721a1a3eb757acd212b13e60c84735393d4",
     ".github/workflows/agentic-flow-ci.yml": "9fa013e7260861aec06f32bbde0e9efe9c7be641f5a151e4974013c3b1f21040",
     "plugin/commands/init.md": "3f89e6998f224d177ff301cf1c430250a1cf8cb73db672cecf8c882c9b57e5f7"
   }
