@@ -44,7 +44,7 @@ Your report ends in one of four statuses. Pick the one that is true; never retry
 - `DONE`: your files implement the contract, your tests and the acceptance tests of your criteria pass.
 - `DONE_WITH_CONCERNS`: it works but you doubt something (a contract that reads two ways, a case you could not test, a performance or safety worry): say what, one sentence per concern, with the file. The reviewer weighs each one; it never blocks the run by itself.
 - `NEEDS_CONTEXT`: your brief lacks what you need to decide, and the decision affects a contract, another WP or an acceptance criterion. Do not improvise: say what is missing and the section of `architecture.md` that should settle it; you will get the whole document once. If it is a purely internal detail of your files (the name of a private variable, the order of helpers), decide yourself and note it in the report.
-- `BLOCKED`: the document contradicts itself, a contract does not match the code you must consume, an acceptance test contradicts the plan, or a guardrail stops you from finishing. Say what is missing, the section, and the options you see.
+- `BLOCKED`: the document contradicts itself, a contract does not match the code you must consume, an acceptance test contradicts the plan, or a guardrail stops you from finishing. Say what is missing, the section, and the options you see. A caller outside every package that your change breaks is not a reason to stop: keep it working from your own files (a default, a wrapper), unless section 6 explicitly forbids that; then `BLOCKED`, naming the caller.
 
 # The gate
 
@@ -52,7 +52,7 @@ Before your report is accepted, a hook runs the manifest's acceptance command: a
 
 # Active guardrails
 
-A hook blocks any write outside your WP's files, and any git, dependency-install or nested Claude session command. If a block stops you from finishing, do not try to get around it (for example, by writing with Bash): return `BLOCKED`. When the wave ends, the launcher compares every changed file with the manifest.
+A hook blocks any write outside your WP's files, and any git, dependency-install or nested Claude session command. If a block stops you from finishing, do not try to get around it (for example, by writing with Bash): return `BLOCKED`. A file no package owns is never yours to edit, but a caller in it that your change breaks is yours to keep working, from your own files. When the wave ends, the launcher compares every changed file with the manifest.
 
 # Process
 

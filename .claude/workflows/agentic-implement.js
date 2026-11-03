@@ -296,7 +296,7 @@ async function launchWave(wave, wpIds, defectsByWp) {
     if (defectsByWp) {
       const attempt = (fixCount[wp] || 0) + 1
       prompt = `Fix ${wp}. Your brief is ${brief(wp)}. The code already exists. These are the defects the judges (reviewer, QA and verification) attribute to your package, as JSON:\n` +
-        `${JSON.stringify(defectsByWp[wp])}\nStay within the contract, do not touch other packages' files or the acceptance tests, and keep the acceptance tests of your criteria green.`
+        `${JSON.stringify(defectsByWp[wp])}\nStay within the contract, do not touch other packages' files or the acceptance tests, and keep the acceptance tests of your criteria green. A defect in a file no package owns (for example, a caller your change broke) is fixed from your own files: keep that caller working with a compatible change, such as a default for a new parameter or a wrapper that keeps the old signature, unless section 6 explicitly forbids it. Return BLOCKED only when no compatible change exists in your files.`
       if (attempt > 1) {
         prompt += `\nThis is attempt ${attempt} of ${plan.max_fix_cycles}: the previous one did not fix it. The defects it was given:\n${JSON.stringify((fixHistory[wp] || []).slice(-2, -1)[0])}\n` +
           `What it changed is in .claude/state/runs/${wp}.fix-${attempt - 1}.diff: read it first and do not repeat that approach. ` +
