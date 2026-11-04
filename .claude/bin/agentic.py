@@ -141,7 +141,7 @@ SYMBOL_RES = {
     (".rb",): re.compile(r"^(?:class|module)\s+([A-Z][\w:]*)"),
 }
 # What `install` puts in another repo: the flow, without the flow's own tests.
-INSTALL_GLOBS = [".claude/bin/agentic.py", ".claude/bin/hook.py", ".claude/bin/compat.py", ".claude/bin/waiting.py", ".claude/bin/pipeline.py", ".claude/bin/brief.py", ".claude/bin/upgrade.py", ".claude/agents/*.md", ".claude/commands/*.md",
+INSTALL_GLOBS = [".claude/bin/agentic.py", ".claude/bin/hook.py", ".claude/bin/compat.py", ".claude/bin/waiting.py", ".claude/bin/pipeline.py", ".claude/bin/brief.py", ".claude/bin/upgrade.py", ".claude/agents/*.md", ".claude/commands/*.md", ".claude/skills/*/SKILL.md",
                  ".claude/workflows/*.js", ".claude/workflows/*.json", ".claude/rules-library/*.md"]
 INSTALL_RECORD = ".claude/agentic-install.json"
 RESULT_FILE = ".agentic-result.json"  # where the workflow leaves its result for save-result
