@@ -310,7 +310,10 @@ class SettingsTests(unittest.TestCase):
     def test_hook_registered(self):
         entries = self.settings["hooks"]["PreToolUse"]
         commands = [h["command"] for e in entries for h in e["hooks"]]
-        self.assertTrue(any("agentic.py" in c and c.strip().endswith("hook") for c in commands))
+        # 2.5.0: the launcher, which picks the frozen guard of a maintainer run or the live agentic.py.
+        self.assertIn('python3 "$CLAUDE_PROJECT_DIR/.claude/bin/hook.py"', commands)
+        self.assertFalse([c for c in commands if "agentic.py" in c and c.strip().endswith("hook")],
+                         "the old command must be gone")
         matchers = "|".join(e.get("matcher", "") for e in entries)
         for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"):
             self.assertIn(tool, matchers)
@@ -318,10 +321,18 @@ class SettingsTests(unittest.TestCase):
     def test_permissions_and_workflows(self):
         perms = self.settings["permissions"]
         self.assertIn("Workflow(agentic-implement)", perms["allow"])
+        self.assertIn("Bash(python3 .claude/state/guard/bin/agentic.py:*)", perms["allow"], "the frozen guard's gate calls")
         self.assertTrue(self.settings.get("enableWorkflows"))
         for rule in ("Bash(git reset --hard:*)", "Bash(git clean:*)", "Bash(rm -rf:*)"):
             self.assertIn(rule, perms["deny"])
         self.assertFalse(any("git push" in r for r in perms["deny"]), "the hook blocks push only for agents")
+
+
+    def test_the_gatekeeper_accepts_the_live_and_the_frozen_command(self):
+        rule = next(line for line in (CLAUDE / "agents" / "gatekeeper.md").read_text(encoding="utf-8").splitlines()
+                    if "are accepted" in line)
+        self.assertIn("`python3 .claude/bin/agentic.py`", rule)
+        self.assertIn("`python3 .claude/state/guard/bin/agentic.py`", rule)
 
 
 class CIHardeningTests(unittest.TestCase):

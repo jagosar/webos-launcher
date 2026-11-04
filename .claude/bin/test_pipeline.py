@@ -27,7 +27,7 @@ SPEC = json.loads((WORKFLOWS / "pipeline-spec.json").read_text(encoding="utf-8")
 
 def world(decl):
     """The simulated world of one scenario: the same defaults and overrides that test_workflow.mjs builds."""
-    state = {"gate_calls": 0, "gates": [], "calls": [], "verifies": 0, "reviews": 0, "qas": 0, "audits": 0}
+    state = {"gate_calls": 0, "gates": [], "gate_prefixes": [], "calls": [], "verifies": 0, "reviews": 0, "qas": 0, "audits": 0}
     base = CONFORMANCE["plan"]
 
     def text(o):
@@ -46,7 +46,7 @@ def world(decl):
             v = pick(decl["verify"], state["verifies"])
             if v:
                 return {"exit_code": v["exit_code"], "output": text(v["output"])}
-        if cmd == "pipeline-plan":
+        if cmd.startswith("pipeline-plan"):
             return {"exit_code": 0, "output": json.dumps({**base, **decl.get("plan", {})})}
         if cmd == "verify":
             return {"exit_code": 0, "output": json.dumps({"ok": True, "blocking": [], "preexisting_failures": [], "suspects": {},
@@ -61,8 +61,10 @@ def world(decl):
             return {"exit_code": 0, "output": json.dumps({"changed": [], "symbols": {}, "callers": [], "truncated": False})}
         return {"exit_code": 0, "output": "RESULTADO: OK"}
 
-    def gate(cmds, label):
+    def gate(cmds, label, agentic=pipeline.LIVE_CMD):
         state["gate_calls"] += 1
+        if state["gate_calls"] > 1 and agentic not in state["gate_prefixes"]:
+            state["gate_prefixes"].append(agentic)
         if any(c.startswith(prefix) for prefix in decl.get("gate_lost", []) for c in cmds):
             raise RuntimeError("gatekeeper returned nothing")  # a timeout or a dead agent
         steps = []
@@ -122,7 +124,7 @@ def summarize(result, state):
     return {"result": result["result"], "failed_stage": result.get("failed_stage"), "detail": result.get("detail"),
             "fix_cycles": result["fix_cycles"],
             "pending": sorted(p.get("type") for p in result.get("pending", [])), "gates": state["gates"],
-            "gate_calls": state["gate_calls"], "agents": sorted(agents), "prompts": prompts,
+            "gate_calls": state["gate_calls"], "gate_prefixes": state["gate_prefixes"], "agents": sorted(agents), "prompts": prompts,
             "not_checked": sorted(f"{e['agent']}:{e['label']}" for e in result.get("not_checked", [])),
             "gate_denials": result.get("gate_denials", {}),
             "review_callers": (result.get("review") or {}).get("callers", 0),
@@ -151,7 +153,7 @@ class ConformanceTests(unittest.TestCase):
         for decl in CONFORMANCE["scenarios"]:
             with self.subTest(scenario=decl["name"]):
                 mine, theirs = run_scenario(decl), self.workflow[decl["name"]]
-                for key in ("result", "failed_stage", "detail", "fix_cycles", "pending", "gates", "gate_calls", "agents", "not_checked", "gate_denials", "review_callers", "verification_failures"):
+                for key in ("result", "failed_stage", "detail", "fix_cycles", "pending", "gates", "gate_calls", "gate_prefixes", "agents", "not_checked", "gate_denials", "review_callers", "verification_failures"):
                     self.assertEqual(mine[key], theirs[key], key)
                 self.assertEqual(mine["prompts"], theirs["prompts"], "the agents must receive the same prompts")
 
@@ -188,6 +190,14 @@ class EngineTests(unittest.TestCase):
         reached = run_scenario(by_name["callers reach the reviewer"])
         self.assertEqual(reached["review_callers"], 1)
         self.assertIn("src/b/x.py", reached["prompts"]["reviewer:reviewer#1"])
+        frozen = run_scenario(by_name["maintainer run uses the frozen guard"])
+        self.assertEqual((frozen["result"], frozen["gate_prefixes"], frozen["gates"][-1]),
+                         ("OK", ["python3 .claude/state/guard/bin/agentic.py"], "guard-release"))
+        briefs_fail = run_scenario(by_name["maintainer run whose briefs fail still releases the guard"])
+        self.assertEqual((briefs_fail["failed_stage"], briefs_fail["gates"][-1]), ("prepare", "guard-release"))
+        self.assertEqual(run_scenario(by_name["a resumed maintainer run keeps the guard"])["gates"][1],
+                         "pipeline-plan --keep-guard")
+        self.assertNotIn("guard-release", run_scenario(by_name["happy path"])["gates"])
         ignored = run_scenario(by_name["callers that are not JSON are ignored"])
         self.assertEqual(ignored["review_callers"], 0)
         self.assertNotIn("Callers", ignored["prompts"]["reviewer:reviewer#1"])

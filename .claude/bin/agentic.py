@@ -49,6 +49,7 @@ Subcommands:
   stop [ID...]        Stops the running agents (all of them if none is given) and records it in the ledger.
   hook                PreToolUse hook (reads JSON from stdin).
   hooks-check         JSON: whether the guardrail hook runs in this session (exit 3 if it does not).
+  guard-release       Maintainer mode: the hook goes back to the live agentic.py (the engines call it at the end).
 
 The ledger (.claude/state/ledger.md) is written by this script, not by the model: it survives context
 compaction and is the source for answering "how is it going?".
@@ -72,7 +73,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compat  # noqa: E402  - the operating-system layer, next to this file
 
-ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
+HERE = Path(__file__).resolve().parent
+GUARD_DIR = ".claude/state/guard"  # the frozen guard of a maintainer run: copies of this folder and of the pipeline spec
+GUARD_CMD = "python3 .claude/state/guard/bin/agentic.py"
+LIVE_CMD = "python3 .claude/bin/agentic.py"
+# A frozen copy runs from GUARD_DIR/bin, four levels below the repo instead of two.
+FROZEN = HERE.name == "bin" and HERE.parent.name == "guard" and HERE.parent.parent.name == "state"
+SOURCE_ROOT = HERE.parents[3] if FROZEN else HERE.parents[1]  # where the flow is installed from (this repo, or the plugin)
+ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or SOURCE_ROOT)
 ARCH = ROOT / "architecture.md"
 STATE = ROOT / ".claude" / "state"
 USAGE = STATE / "usage.jsonl"
@@ -97,7 +105,12 @@ DOCS_DEFAULT_FILES = ["README.md", "CHANGELOG.md", "docs/"]
 DEFAULT_CODEMAP = "docs/CODEMAP.md"
 RESERVED_IDS = {"QA", "AT", "REVIEW", "DOCS"}
 ARCHIVE_DIR = "docs/architecture/"  # decision archive: written by /architect, never by a WP
-SOURCE_ROOT = Path(__file__).resolve().parents[2]  # where the flow is installed from (this repo, or the plugin)
+# Never owned, not even in maintainer mode: the settings that register the hooks, the flow's state (the frozen guard
+# included) and the two live hook scripts. An agent that could change them could reroute or replace the guard.
+NEVER_OWNED = (".claude/settings.json", ".claude/settings.local.json", ".claude/state/", ".claude/bin/hook.py",
+               ".claude/bin/waiting.py")
+FLOW_NAME = "agentic-flow"
+TEMPLATE_MARKER = "<!-- agentic-flow-template -->"  # README.md's first line in the flow's own repo
 RULES_LIBRARY = ROOT / ".claude" / "rules-library"
 RULES_DIR = ROOT / ".claude" / "rules" / "agentic"  # Claude Code carga .claude/rules/; agentic/ lo gestiona rules-sync
 # Signals for each rules pack: project files (in any folder) and code extensions.
@@ -128,7 +141,7 @@ SYMBOL_RES = {
     (".rb",): re.compile(r"^(?:class|module)\s+([A-Z][\w:]*)"),
 }
 # What `install` puts in another repo: the flow, without the flow's own tests.
-INSTALL_GLOBS = [".claude/bin/agentic.py", ".claude/bin/compat.py", ".claude/bin/waiting.py", ".claude/bin/pipeline.py", ".claude/bin/brief.py", ".claude/bin/upgrade.py", ".claude/agents/*.md", ".claude/commands/*.md",
+INSTALL_GLOBS = [".claude/bin/agentic.py", ".claude/bin/hook.py", ".claude/bin/compat.py", ".claude/bin/waiting.py", ".claude/bin/pipeline.py", ".claude/bin/brief.py", ".claude/bin/upgrade.py", ".claude/agents/*.md", ".claude/commands/*.md",
                  ".claude/workflows/*.js", ".claude/workflows/*.json", ".claude/rules-library/*.md"]
 INSTALL_RECORD = ".claude/agentic-install.json"
 RESULT_FILE = ".agentic-result.json"  # where the workflow leaves its result for save-result
@@ -362,6 +375,13 @@ def open_ended_command(cmd):
 def validate(manifest):
     errors = []
     table = wps(manifest)
+    flag = manifest.get("maintainer")
+    if flag is not None and not isinstance(flag, bool):
+        errors.append("maintainer: must be true or false.")
+    elif flag and not is_flow_repo(ROOT):
+        errors.append("maintainer: maintainer mode is only for the agentic-flow repository (.claude-plugin/plugin.json "
+                      f"named {FLOW_NAME} and {TEMPLATE_MARKER} on README.md's first line).")
+    maintainer = maintainer_mode(manifest)
     if not table:
         errors.append("The manifest has no work_packages.")
     for rid in RESERVED_IDS & set(table):
@@ -412,7 +432,11 @@ def validate(manifest):
                 continue
             if f.startswith("/") or ".." in Path(f).parts:
                 errors.append(f"{ent['id']}: path not relative to the repo: {f}")
-            if f == "architecture.md" or f.startswith(".claude/") or f.startswith(ARCHIVE_DIR) or f in ("", "./", "/"):
+            if f.startswith(".claude/") and maintainer:
+                problem = never_owned_problem(f)
+                if problem:
+                    errors.append(f"{ent['id']}: cannot own '{f}': {problem}")
+            elif f == "architecture.md" or f.startswith(".claude/") or f.startswith(ARCHIVE_DIR) or f in ("", "./", "/"):
                 errors.append(f"{ent['id']}: cannot own '{f}'.")
     owners = [(f, e["id"]) for e in entities(manifest).values() if isinstance(e.get("files"), list)
               for f in e["files"] if isinstance(f, str)]
@@ -680,10 +704,11 @@ def check_stage(manifest, label):
     report = {o["id"]: [] for o in owners}
     violations, owned = [], []
     nobodys = ("architecture.md", codemap_path(manifest))
+    maintainer = maintainer_mode(manifest)
     for path in changed:
         owner = next((o for o in owners if any(owns(f, path) for f in o["files"])), None)
         # Nobody writes the plan, the flow, the decision archive or the code map, even inside a zone that covers them.
-        if owner and (path in nobodys or path.startswith((".claude/", ARCHIVE_DIR))):
+        if owner and (path in nobodys or path.startswith(ARCHIVE_DIR) or flow_path_refused(path, maintainer)):
             owner = None
         if owner:
             report[owner["id"]].append(path)
@@ -1270,6 +1295,11 @@ def merge_settings(dst, src):
         # matcher is extended, never replaced (it may have been trimmed on purpose).
         source_hook = src["hooks"]["PreToolUse"][0]["hooks"][0]
         for entry, hook_ in ours:
+            # 2.5: the hook runs through the launcher, which picks the frozen guard of a maintainer run. Only the
+            # command changes; the project's matcher and timeout stay.
+            if is_old_hook_command(hook_.get("command", "")) and not is_old_hook_command(source_hook["command"]):
+                hook_["command"] = source_hook["command"]
+                added.append("hook PreToolUse (hook.py)")
             if "StructuredOutput" not in entry.get("matcher", ""):
                 entry["matcher"] = (entry.get("matcher", "").rstrip("|") + "|StructuredOutput").lstrip("|")
                 hook_.setdefault("timeout", source_hook.get("timeout", 900))
@@ -1469,7 +1499,7 @@ def acceptance(manifest, expect):
 
 SEQ_OUTPUT_CAP = 12_000
 SEQ_COMMANDS = {"pipeline-plan", "briefs", "baseline", "open-stage", "close-stage", "verify", "codemap", "docs-check",
-                "acceptance", "callers", "hooks-check"}
+                "acceptance", "callers", "hooks-check", "guard-release"}
 
 
 def cap_output(out):
@@ -1484,13 +1514,15 @@ def cap_output(out):
     return "[truncated]\n" + out[-SEQ_OUTPUT_CAP:]
 
 
-def run_steps(groups, env=None):
+def run_steps(groups, env=None, script=None):
     """Runs each command (an argv list) as its own process, in order, and stops at the first that fails.
-    `env`: the steps' environment (default: this process's, with CLAUDE_PROJECT_DIR). Returns (ok, [{"cmd", "exit_code", "output"}])."""
+    `env`: the steps' environment (default: this process's, with CLAUDE_PROJECT_DIR). `script`: the agentic.py to run
+    (default: this file). Returns (ok, [{"cmd", "exit_code", "output"}])."""
     results, ok = [], True
     env = env if env is not None else dict(os.environ, CLAUDE_PROJECT_DIR=str(ROOT))
+    script = Path(script) if script else Path(__file__).resolve()
     for g in groups:
-        r = subprocess.run([sys.executable, str(Path(__file__).resolve()), *g], cwd=ROOT, capture_output=True, text=True,
+        r = subprocess.run([sys.executable, str(script), *g], cwd=ROOT, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", env=env)
         out = (r.stdout + r.stderr).strip()
         results.append({"cmd": " ".join(g), "exit_code": r.returncode,
@@ -1523,7 +1555,8 @@ def seq(steps):
 # ---------- the whole pipeline, without a workflow (fallback mode and CI) ----------
 
 PIPELINE_STATE = STATE / "pipeline.json"
-PIPELINE_SPEC = ROOT / ".claude" / "workflows" / "pipeline-spec.json"
+# A frozen copy reads the spec frozen with it, so an agent that edits the live spec cannot change the run's prompts.
+PIPELINE_SPEC = (HERE.parent if FROZEN else ROOT / ".claude") / "workflows" / "pipeline-spec.json"
 READ_ONLY_AGENTS = {"verifier", "test-auditor"}  # no zone of their own: they run as the read-only REVIEW entity
 
 
@@ -1621,8 +1654,9 @@ def run_pipeline(manifest, args):
     gate_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
     gate_env["CLAUDE_PROJECT_DIR"] = str(ROOT)
 
-    def gate(cmds, label):
-        ok, results = run_steps([shlex.split(c) for c in cmds], env=gate_env)
+    def gate(cmds, label, agentic=LIVE_CMD):
+        script = ROOT / GUARD_DIR / "bin" / "agentic.py" if agentic == GUARD_CMD else None
+        ok, results = run_steps([shlex.split(c) for c in cmds], env=gate_env, script=script)
         return {"steps": results}
 
     def agent(prompt, agent_type, label, ident):
@@ -1654,7 +1688,14 @@ def architecture_type():
     return m.group(1).lower() if m else None
 
 
-def pipeline_plan(manifest):
+def pipeline_plan(manifest, keep_guard=False):
+    """The plan the engines follow, as one JSON line. A maintainer run freezes the guard first (a resumed one with
+    --keep-guard keeps the copy of its first start); any other run releases a guard a crashed run may have left."""
+    maintainer = maintainer_mode(manifest)
+    if not maintainer:
+        release_guard()
+    elif not (keep_guard and (ROOT / GUARD_DIR / "active.json").exists()):
+        freeze_guard()
     waves = sorted({wp["wave"] for wp in wps(manifest).values()})
     plan = {"waves": waves, "acceptance": bool(at_entity(manifest)["command"]), "type": architecture_type(),
             "verify": sorted(manifest.get("verify", {})), "max_fix_cycles": int(load_config().get("max_fix_cycles", 2)),
@@ -1662,8 +1703,68 @@ def pipeline_plan(manifest):
             "baseline": bool(manifest.get("verify")),
             "docs": bool(docs_entity(manifest)), "codemap": codemap_path(manifest), "rules": rule_files(manifest),
             "wave_of": {wp["id"]: wp["wave"] for wp in wps(manifest).values()},
-            "work_packages": {str(w): sorted(wp["id"] for wp in stage_owners(manifest, str(w))) for w in waves}}
+            "work_packages": {str(w): sorted(wp["id"] for wp in stage_owners(manifest, str(w))) for w in waves},
+            "maintainer": maintainer, "agentic": GUARD_CMD if maintainer else LIVE_CMD}
     print(json.dumps(plan))
+
+
+def is_flow_repo(root):
+    """The flow's own repo: its plugin manifest is named agentic-flow and README.md starts with the template marker
+    (a copy made from the template loses the marker)."""
+    try:
+        plugin = json.loads((root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        first = (root / "README.md").read_text(encoding="utf-8").split("\n", 1)[0]
+    except (OSError, ValueError):
+        return False
+    return isinstance(plugin, dict) and plugin.get("name") == FLOW_NAME and first.strip() == TEMPLATE_MARKER
+
+
+def maintainer_mode(manifest):
+    """The flag and the flow's own repo: the hook and close-stage never run validate, so a stray flag in a project
+    relaxes nothing."""
+    return manifest.get("maintainer") is True and is_flow_repo(ROOT)
+
+
+def never_owned_problem(path):
+    """Why `path` cannot be owned even in maintainer mode, or None."""
+    hit = next((n for n in NEVER_OWNED if owner_conflict(path, n)), None)
+    if hit is None:
+        return None
+    return f"{hit} is never owned, not even in maintainer mode (it decides which guard runs)."
+
+
+def flow_path_refused(path, maintainer):
+    """A path under .claude/ that no agent writes: all of them, or in maintainer mode only the never-owned ones."""
+    return path.startswith(".claude/") and (not maintainer or never_owned_problem(path) is not None)
+
+
+def freeze_guard():
+    """Copies the live flow scripts (not the tests) and the pipeline spec into GUARD_DIR and marks it active. A
+    maintainer run is then judged by this copy, whatever its agents change in .claude/bin."""
+    guard_dir = ROOT / GUARD_DIR
+    release_guard()
+    for sub in ("bin", "workflows"):
+        shutil.rmtree(guard_dir / sub, ignore_errors=True)
+    (guard_dir / "bin").mkdir(parents=True)
+    (guard_dir / "workflows").mkdir(parents=True)
+    files = {}
+    sources = [(p, f"bin/{p.name}") for p in sorted((ROOT / ".claude" / "bin").glob("*.py"))
+               if not p.name.startswith("test_") and p.name != "testutil.py"]
+    sources.append((ROOT / ".claude" / "workflows" / "pipeline-spec.json", "workflows/pipeline-spec.json"))
+    for src, rel in sources:
+        shutil.copyfile(src, guard_dir / rel)
+        files[rel] = hashlib.sha256(src.read_bytes()).hexdigest()
+    active = {"root": str(ROOT), "frozen_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "files": files}
+    (guard_dir / "active.json").write_text(json.dumps(active, indent=2) + "\n", encoding="utf-8")
+    return active
+
+
+def release_guard():
+    """The hook goes back to the live agentic.py. The copies stay until the next freeze replaces them."""
+    try:
+        (ROOT / GUARD_DIR / "active.json").unlink()
+    except FileNotFoundError:
+        pass
 
 
 def stage_label(arg):
@@ -2266,7 +2367,8 @@ def guard(data):
         block(f"{owner_id} does not exist in the manifest of architecture.md.")
     # No agent of the flow writes the plan, the flow's configuration, the decision archive or the generated
     # code map, even if its zone includes them by prefix (for example, "docs/").
-    if rel == "architecture.md" or rel.startswith((".claude/", ARCHIVE_DIR)) or rel == codemap_path(manifest):
+    if (rel == "architecture.md" or rel.startswith(ARCHIVE_DIR) or rel == codemap_path(manifest)
+            or flow_path_refused(rel, maintainer_mode(manifest))):
         block(f"{owner_id}: {rel} is not written by any agent of the flow (plan, configuration, decision archive "
               "or generated map). If it has to change, return the blocked status your schema allows (BLOCKED for an "
               "implementer, BLOCKER for the others).")
@@ -2285,10 +2387,16 @@ HOOKS_DEAD_MSG = (
     "`/implement fallback`. Or open a session with this repository alone.")
 
 
+def is_old_hook_command(command):
+    """The hook command before 2.5.0: `agentic.py ... hook`."""
+    return "agentic.py" in command and command.rstrip().endswith("hook")
+
+
 def flow_hooks(pre_tool_use):
-    """The flow's own entries in a PreToolUse list: (entry, hook) pairs whose command runs `agentic.py ... hook`."""
+    """The flow's own entries in a PreToolUse list: (entry, hook) pairs whose command runs the launcher `hook.py`, or
+    `agentic.py ... hook` as before 2.5.0."""
     return [(e, h) for e in pre_tool_use for h in e.get("hooks", [])
-            if "agentic.py" in h.get("command", "") and h.get("command", "").rstrip().endswith("hook")]
+            if ".claude/bin/hook.py" in h.get("command", "") or is_old_hook_command(h.get("command", ""))]
 
 
 def is_flow_agent(data):
@@ -2425,7 +2533,12 @@ def main():
     elif cmd == "run-qa":
         run_qa(require_valid())
     elif cmd == "pipeline-plan":
-        pipeline_plan(require_valid())
+        if args not in ([], ["--keep-guard"]):
+            die("Uso: pipeline-plan [--keep-guard]")
+        pipeline_plan(require_valid(), keep_guard=bool(args))
+    elif cmd == "guard-release":
+        release_guard()
+        print("Guard released.")
     elif cmd == "open-stage":
         if not args:
             die("Uso: open-stage N|acceptance|review|qa")
