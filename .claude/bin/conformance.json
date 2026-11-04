@@ -953,6 +953,9 @@
           "output": "not json"
         }
       ]
-    }
-  ]
+    },
+    {"name": "maintainer run uses the frozen guard", "plan": {"maintainer": true, "agentic": "python3 .claude/state/guard/bin/agentic.py"}},
+    {"name": "maintainer run whose briefs fail still releases the guard", "plan": {"maintainer": true, "agentic": "python3 .claude/state/guard/bin/agentic.py"}, "gate_fail": [{"prefix": "briefs", "exit_code": 1, "output": "boom"}]},
+    {"name": "a resumed maintainer run keeps the guard", "plan": {"maintainer": true, "agentic": "python3 .claude/state/guard/bin/agentic.py"}, "args": {"start_wave": 1}}
+]
 }

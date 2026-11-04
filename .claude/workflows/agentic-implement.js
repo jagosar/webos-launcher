@@ -22,7 +22,8 @@ export const meta = {
 // (`agentic.py run-pipeline`) also reads; test_workflow.mjs fails if the two drift apart.
 const opts = args || {}
 const startWave = /^\d+$/.test(String(opts.start_wave ?? '')) ? Number(opts.start_wave) : null  // 2 or "2"
-const AGENTIC = 'python3 .claude/bin/agentic.py'
+// The live command runs the first call; after it, the plan's (the frozen guard of a maintainer run).
+let AGENTIC = 'python3 .claude/bin/agentic.py'
 
 // ---------- schemas ----------
 const GATE_SCHEMA = {
@@ -393,15 +394,19 @@ async function fixCycle(defects, opened) {
 // package. When resuming from a wave (start_wave), the original run's baseline is kept.
 phase('Prepare')
 // hooks-check goes first: a session whose guardrail hook does not fire must not pay for a single agent.
-const first = await seq(['hooks-check', 'pipeline-plan', 'briefs'], 'prepare')
+// A resumed run keeps the guard frozen at its first start: the agents may have changed the live one since.
+const first = await seq(['hooks-check', startWave === null ? 'pipeline-plan' : 'pipeline-plan --keep-guard', 'briefs'], 'prepare')
 const hookStep = step(first, 0)
 if (hookStep && !ok(hookStep)) return stop('prepare', HOOKS_DEAD, { gate: hookStep })
 const planStep = step(first, 1)
 const plan = ok(planStep) ? lastJson(planStep.output) : null
 if (!plan) return stop('prepare', 'pipeline-plan failed: the manifest is not valid', { gate: planStep })
-if (!ok(step(first, 2))) return stop('prepare', 'briefs failed', { gate: step(first, 2) })
+if (plan.agentic) AGENTIC = plan.agentic
 // Language rules (rules-sync): every agent that writes or judges code receives them in its prompt.
 const RULES = plan.rules && plan.rules.length ? ` Rules you must follow (language and common): ${plan.rules.join(', ')}.` : ''
+// The rest of the run, from briefs on. A maintainer run hands the hook back to the live agentic.py on every way out.
+const runAfterPlan = async () => {
+if (!ok(step(first, 2))) return stop('prepare', 'briefs failed', { gate: step(first, 2) })
 if (startWave === null) {
   phase('Baseline')
   const base = step(await seq(['baseline'], 'baseline'), 0)
@@ -548,4 +553,10 @@ while (true) {
   const fixed = await fixCycle(eligible, true)
   if (fixed.stopped) return fixed.stopped
   post = fixed.post
+}
+}
+try {
+  return await runAfterPlan()
+} finally {
+  if (plan.maintainer) await seq(['guard-release'], 'guard-release')
 }

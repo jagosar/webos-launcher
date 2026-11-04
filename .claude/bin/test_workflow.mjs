@@ -20,6 +20,7 @@ async function simulate(scenario = {}, args = {}) {
   const schemas = {}
   const executed = []
   let gateCalls = 0
+  const gatePrefixes = []  // the command prefix of every gate call after the first, distinct, in order
   let reviewRound = 0
   let qaRound = 0
   let auditRound = 0
@@ -28,7 +29,7 @@ async function simulate(scenario = {}, args = {}) {
     executed.push(cmd)
     const forced = scenario.gate && scenario.gate(cmd)
     if (forced) return forced
-    if (cmd === 'pipeline-plan') return { exit_code: 0, output: JSON.stringify({ ...PLAN, ...(scenario.plan || {}) }) }
+    if (cmd.startsWith('pipeline-plan')) return { exit_code: 0, output: JSON.stringify({ ...PLAN, ...(scenario.plan || {}) }) }
     if (cmd === 'verify') return { exit_code: 0, output: JSON.stringify({ ok: true, blocking: [], preexisting_failures: [], suspects: {}, phases: [{ name: 'tests', passed: true }] }) }
     if (cmd === 'baseline') return { exit_code: 0, output: JSON.stringify({ phases: [{ name: 'tests', passed: true }], preexisting_failures: [] }) }
     if (cmd === 'codemap') return { exit_code: 0, output: JSON.stringify({ path: 'docs/CODEMAP.md', files: 3, changed: true }) }
@@ -42,6 +43,9 @@ async function simulate(scenario = {}, args = {}) {
     switch (opts.agentType) {
       case 'gatekeeper': {
         gateCalls += 1
+        const line = prompt.slice(prompt.lastIndexOf('\n') + 1)
+        const prefix = line.slice(0, line.indexOf('agentic.py ') + 'agentic.py'.length)
+        if (gateCalls > 1 && !gatePrefixes.includes(prefix)) gatePrefixes.push(prefix)
         const cmd = prompt.split('agentic.py ')[1].trim()
         const cmds = cmd.startsWith('seq ') ? cmd.slice(4).split(' + ') : [cmd]
         // A lost gatekeeper call: a timeout or a dead agent, so the script gets nothing back.
@@ -92,7 +96,7 @@ async function simulate(scenario = {}, args = {}) {
   }
   const parallel = thunks => Promise.all(thunks.map(t => t()))
   const result = await script(agent, parallel, () => {}, () => {}, args)
-  return { result, calls, schemas, gateCalls, gates: executed }
+  return { result, calls, schemas, gateCalls, gates: executed, gatePrefixes }
 }
 
 const grave = (wp, severity = 'high') => ({ severity, wp, file: 'src/a.py', line: 3, problem: 'p', evidence: 'e' })
@@ -476,7 +480,7 @@ function fromDecl(d) {
     reports: d.reports,
   }
 }
-const summarize = ({ result, calls, gates, gateCalls }) => {
+const summarize = ({ result, calls, gates, gateCalls, gatePrefixes }) => {
   const seen = {}
   const prompts = {}
   const agents = []
@@ -488,7 +492,7 @@ const summarize = ({ result, calls, gates, gateCalls }) => {
   }
   return {
     result: result.result, failed_stage: result.failed_stage ?? null, detail: result.detail ?? null, fix_cycles: result.fix_cycles,
-    pending: (result.pending || []).map(p => p.type).sort(), gates, gate_calls: gateCalls, agents: agents.sort(), prompts,
+    pending: (result.pending || []).map(p => p.type).sort(), gates, gate_calls: gateCalls, gate_prefixes: gatePrefixes, agents: agents.sort(), prompts,
     not_checked: (result.not_checked || []).map(e => `${e.agent}:${e.label}`).sort(),
     gate_denials: result.gate_denials || {},
     review_callers: (result.review && result.review.callers) || 0,
@@ -547,6 +551,12 @@ test('every conformance scenario ends as described in its name', async () => {
   assert.deepEqual([twice.result, twice.failed_stage, twice.agents.filter(a => a === 'implementer:WP-02 (context)').length], ['REVIEW', 'wave 1', 1])
   const inFix = await run1('needs context in a fix wave is a blocker')
   assert.deepEqual([inFix.result, inFix.failed_stage, inFix.agents.filter(a => a.includes('(context)')).length], ['REVIEW', 'fix wave 1', 0])
+  const frozen = await run1('maintainer run uses the frozen guard')
+  assert.deepEqual([frozen.result, frozen.gate_prefixes, frozen.gates.at(-1)], ['OK', ['python3 .claude/state/guard/bin/agentic.py'], 'guard-release'])
+  const briefsFail = await run1('maintainer run whose briefs fail still releases the guard')
+  assert.deepEqual([briefsFail.failed_stage, briefsFail.gates.at(-1)], ['prepare', 'guard-release'])
+  assert.equal((await run1('a resumed maintainer run keeps the guard')).gates[1], 'pipeline-plan --keep-guard')
+  assert.ok(!(await run1('happy path')).gates.includes('guard-release'), 'a normal run releases nothing')
   const reached = await run1('callers reach the reviewer')
   assert.equal(reached.review_callers, 1)
   assert.ok(reached.prompts['reviewer:reviewer#1'].includes('src/b/x.py'))

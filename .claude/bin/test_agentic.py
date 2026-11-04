@@ -1699,5 +1699,104 @@ class LauncherTests(Base):
         self.assertFalse(self.called("WP-01"))
 
 
+class MaintainerModeTests(unittest.TestCase):
+    """Maintainer mode (2.5.0): the flow's own repo may plan work on .claude/, judged by a frozen guard."""
+
+    OLD_HOOK = 'python3 "$CLAUDE_PROJECT_DIR/.claude/bin/agentic.py" hook'
+    NEW_HOOK = 'python3 "$CLAUDE_PROJECT_DIR/.claude/bin/hook.py"'
+
+    def flow_dir(self, name="agentic-flow", first_line="<!-- agentic-flow-template -->"):
+        d = Path(tempfile.mkdtemp(prefix="agentic-flowrepo-"))
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        (d / ".claude-plugin").mkdir()
+        (d / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": name}), encoding="utf-8")
+        (d / "README.md").write_text(first_line + "\n# x\n", encoding="utf-8")
+        return d
+
+    def test_the_flow_repo_needs_the_plugin_name_and_the_marker(self):
+        self.assertTrue(agentic.is_flow_repo(self.flow_dir()))
+        self.assertFalse(agentic.is_flow_repo(self.flow_dir(name="other")))
+        self.assertFalse(agentic.is_flow_repo(self.flow_dir(first_line="# a copy of the template")))
+
+    def test_a_repo_without_a_plugin_manifest_is_not_the_flow(self):
+        d = self.flow_dir()
+        (d / ".claude-plugin" / "plugin.json").unlink()
+        self.assertFalse(agentic.is_flow_repo(d))
+
+    def test_a_broken_plugin_manifest_is_not_the_flow(self):
+        d = self.flow_dir()
+        (d / ".claude-plugin" / "plugin.json").write_text("{", encoding="utf-8")
+        self.assertFalse(agentic.is_flow_repo(d))
+
+    def test_the_flag_only_counts_in_the_flow_repo(self):
+        with mock.patch.object(agentic, "is_flow_repo", return_value=False):
+            self.assertFalse(agentic.maintainer_mode({"maintainer": True}))
+        with mock.patch.object(agentic, "is_flow_repo", return_value=True):
+            self.assertTrue(agentic.maintainer_mode({"maintainer": True}))
+            self.assertFalse(agentic.maintainer_mode({"maintainer": "true"}))
+            self.assertFalse(agentic.maintainer_mode({}))
+
+    def test_never_owned_matches_either_way(self):
+        for path in (".claude/settings.json", ".claude/state/guard/x", ".claude/", ".claude/bin/", ".claude/bin/hook.py"):
+            with self.subTest(path=path):
+                self.assertIsNotNone(agentic.never_owned_problem(path))
+        for path in (".claude/bin/agentic.py", ".claude/agents/", ".claude/bin/hook.pyc", ".claude/stateful.md"):
+            with self.subTest(path=path):
+                self.assertIsNone(agentic.never_owned_problem(path))
+
+    def test_the_flag_must_be_a_boolean(self):
+        errors = agentic.validate(dict(MANIFEST, maintainer="yes"))
+        self.assertTrue(any(e.startswith("maintainer:") for e in errors), errors)
+
+    def test_without_the_flag_flow_paths_stay_refused(self):
+        m = json.loads(json.dumps(MANIFEST))
+        m["work_packages"][0]["files"] = [".claude/bin/agentic.py"]
+        self.assertIn("WP-01: cannot own '.claude/bin/agentic.py'.", agentic.validate(m))
+
+    def test_flow_paths_are_refused_outside_maintainer_mode_only(self):
+        self.assertTrue(agentic.flow_path_refused(".claude/bin/agentic.py", False))
+        self.assertFalse(agentic.flow_path_refused(".claude/bin/agentic.py", True))
+        self.assertTrue(agentic.flow_path_refused(".claude/settings.json", True))
+        self.assertFalse(agentic.flow_path_refused("src/a.py", False))
+
+    def test_releasing_with_nothing_active_is_fine(self):
+        d = self.flow_dir()
+        with mock.patch.object(agentic, "ROOT", d):
+            agentic.release_guard()
+        self.assertFalse((d / agentic.GUARD_DIR / "active.json").exists())
+
+    def test_install_migrates_the_old_hook_command(self):
+        d = self.flow_dir()
+        dst = d / "settings.json"
+        dst.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Write|Bash|StructuredOutput", "hooks": [
+            {"type": "command", "command": self.OLD_HOOK, "timeout": 600}]}]}}), encoding="utf-8")
+        src = {"hooks": {"PreToolUse": [{"matcher": "Write|Edit|Bash|StructuredOutput", "hooks": [
+            {"type": "command", "command": self.NEW_HOOK, "timeout": 900}]}]}}
+        data, added = agentic.merge_settings(dst, src)
+        entries = data["hooks"]["PreToolUse"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["matcher"], "Write|Bash|StructuredOutput")
+        self.assertEqual(entries[0]["hooks"][0], {"type": "command", "command": self.NEW_HOOK, "timeout": 600})
+        self.assertIn("hook PreToolUse (hook.py)", added)
+
+    def test_install_keeps_the_launcher_command(self):
+        d = self.flow_dir()
+        dst = d / "settings.json"
+        src = {"hooks": {"PreToolUse": [{"matcher": "Write|Bash|StructuredOutput", "hooks": [
+            {"type": "command", "command": self.NEW_HOOK, "timeout": 900}]}]}}
+        dst.write_text(json.dumps(src), encoding="utf-8")
+        data, added = agentic.merge_settings(dst, src)
+        self.assertEqual(data["hooks"]["PreToolUse"], src["hooks"]["PreToolUse"])
+        self.assertNotIn("hook PreToolUse", " ".join(added))
+
+    def test_run_steps_runs_the_given_script(self):
+        d = self.flow_dir()
+        script = d / "fake.py"
+        script.write_text("import sys\nprint('fake', *sys.argv[1:])\n", encoding="utf-8")
+        ok, results = agentic.run_steps([["guard-release"]], script=script)
+        self.assertTrue(ok)
+        self.assertEqual(results[0]["output"], "fake guard-release")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -71,6 +71,16 @@ NOTES = {
         "is only for when no compatible change exists or section 6 explicitly forbids it. A customised "
         "implementer.md keeps the old wording: merge the two sentences.",
     ],
+    "2.5.0": [
+        "The PreToolUse hook now runs through a small launcher, .claude/bin/hook.py, instead of agentic.py directly: "
+        "install rewrites the old command in .claude/settings.json (keeping your matcher and timeout) and ships "
+        "hook.py. A settings.json you maintain by hand needs the new command: "
+        "python3 \"$CLAUDE_PROJECT_DIR/.claude/bin/hook.py\".",
+        "Maintainer mode, for the agentic-flow repository only: a plan with \"maintainer\": true may give work "
+        "packages files under .claude/ (never settings.json, settings.local.json, .claude/state/, hook.py or "
+        "waiting.py). The run is judged by a frozen copy of the guard, and the gatekeeper accepts its command. "
+        "Projects are not affected: the flag is refused anywhere else.",
+    ],
     "2.2.0": [
         "The reviewer reads beyond the diff: a deterministic `callers` step lists, for every public symbol defined "
         "in a changed file (the code map's regexes, ten languages), the lines of tracked code outside the diff that "

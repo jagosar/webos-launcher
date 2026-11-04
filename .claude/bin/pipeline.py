@@ -54,6 +54,9 @@ LOST = ("the gatekeeper returned no usable result (a timeout or garbled output);
         "check `agentic.py status` before resuming")
 
 
+LIVE_CMD = "python3 .claude/bin/agentic.py"
+
+
 class Halted(BaseException):
     """Someone ran `agentic.py stop`: not an error of an agent, so it is not swallowed with them."""
 
@@ -118,6 +121,8 @@ class Pipeline:
         self.start_wave = int(start_wave) if isinstance(start_wave, str) and start_wave.isdigit() else start_wave
         self.wave_done = wave_done
         self.plan = None
+        # The command of every gate call after the first: the plan's (the frozen guard in maintainer mode).
+        self.agentic = LIVE_CMD
         self.rules = ""
         self.fix_count, self.fix_history, self.limit_pending = {}, {}, []
         self.qa_pending = []  # the last QA's design and no-WP items: they stay listed whatever comes after
@@ -135,7 +140,8 @@ class Pipeline:
     def seq(self, cmds, label):
         """Several commands in one call; None if the gate failed. Stops at the first step that fails."""
         try:
-            res = self._gate(cmds, label)
+            # A gate given only (cmds, label), as before 2.5.0, keeps working while the command is the live one.
+            res = self._gate(cmds, label) if self.agentic == LIVE_CMD else self._gate(cmds, label, self.agentic)
         except Exception as e:  # noqa: BLE001 - a gate that blows up is a failed gate, never a crash of the pipeline
             self.log(f"{label} failed: {e}")
             return None
@@ -230,11 +236,17 @@ class Pipeline:
             return self._execute()
         except Halted:
             return self.stop("stopped", "the run was stopped with `agentic.py stop`")
+        finally:
+            # A maintainer run hands the hook back to the live agentic.py on every way out, once it has a plan.
+            if self.plan and self.plan.get("maintainer"):
+                self.seq(["guard-release"], "guard-release")
 
     def _execute(self):
         self.phase("Prepare")
         # hooks-check goes first: a session whose guardrail hook does not fire must not pay for a single agent.
-        first = self.seq(["hooks-check", "pipeline-plan", "briefs"], "prepare")
+        # A resumed run keeps the guard frozen at its first start: the agents may have changed the live one since.
+        plan_cmd = "pipeline-plan" if self.start_wave is None else "pipeline-plan --keep-guard"
+        first = self.seq(["hooks-check", plan_cmd, "briefs"], "prepare")
         hook_step = self.step(first, 0)
         if hook_step and not self.ok(hook_step):
             return self.stop("prepare", HOOKS_DEAD, gate=hook_step)
@@ -242,6 +254,7 @@ class Pipeline:
         self.plan = lines_json(plan_step["output"]) if self.ok(plan_step) else None
         if not self.plan:
             return self.stop("prepare", "pipeline-plan failed: the manifest is not valid", gate=plan_step)
+        self.agentic = self.plan.get("agentic") or LIVE_CMD
         if not self.ok(self.step(first, 2)):
             return self.stop("prepare", "briefs failed", gate=self.step(first, 2))
         plan = self.plan
