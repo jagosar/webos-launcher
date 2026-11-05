@@ -8,6 +8,7 @@ Run: python3 -m unittest discover -s .claude/bin -p "test_*.py"
 import json
 import re
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -17,6 +18,14 @@ AGENTS_DIR = CLAUDE / "agents"
 COMMANDS_DIR = CLAUDE / "commands"
 WORKFLOW = CLAUDE / "workflows" / "agentic-implement.js"
 AGENTIC = CLAUDE / "bin" / "agentic.py"
+sys.path.insert(0, str(AGENTIC.parent))
+import agentic  # noqa: E402
+import installer  # noqa: E402
+import repo_scan  # noqa: E402
+
+# Tests that hold only in the flow's own repository. The guard tolerates a project with no README (is_flow_repo does),
+# and a guard that raised at import time would stop every test in this file from loading there.
+FLOW_REPO_ONLY = unittest.skipUnless(agentic.is_flow_repo(ROOT), "the flow's own repo")
 
 # Every agent run-pipeline starts with --json-schema lists StructuredOutput: with a `tools:` list that leaves it out,
 # `claude -p --agent` (seen with CLI 2.1.316) returns no structured_output and the run stops with NO REPORT.
@@ -61,11 +70,7 @@ def tracked_files():
 
 
 def agentic_subcommands():
-    src = AGENTIC.read_text(encoding="utf-8")
-    cmds = set(re.findall(r'cmd == "([\w-]+)"', src))
-    for group in re.findall(r"cmd in \(([^)]*)\)", src):
-        cmds |= set(re.findall(r'"([\w-]+)"', group))
-    return cmds
+    return set(agentic.COMMANDS)
 
 
 class AgentDefinitionTests(unittest.TestCase):
@@ -278,9 +283,7 @@ class RulesLibraryTests(unittest.TestCase):
         return {p.stem for p in RULES_LIBRARY.glob("*.md")} - {"common"}
 
     def test_detection_and_library_match(self):
-        src = AGENTIC.read_text(encoding="utf-8")
-        block = re.search(r"STACK_SIGNALS = \{(.*?)\n\}", src, re.S).group(1)
-        detected = set(re.findall(r'^\s+"([a-z]+)": \(', block, re.M))
+        detected = set(repo_scan.STACK_SIGNALS)
         self.assertEqual(detected, self.packs(), "a detectable language without rules, or rules that are never installed")
 
     def test_language_packs(self):
@@ -341,8 +344,10 @@ class CIHardeningTests(unittest.TestCase):
 
     def sources(self):
         yield ".github/workflows/agentic-flow-ci.yml", (ROOT / ".github/workflows/agentic-flow-ci.yml").read_text(encoding="utf-8")
-        guide = (ROOT / "docs/how-to/ci-github-actions.md").read_text(encoding="utf-8")
-        yield "docs/how-to/ci-github-actions.md", "\n".join(re.findall(r"```yaml\n(.*?)```", guide, re.S))
+        guide_path = ROOT / "docs/how-to/ci-github-actions.md"
+        if guide_path.exists():  # a project may not carry the flow's guides; its copy of the CI file is still checked
+            guide = guide_path.read_text(encoding="utf-8")
+            yield "docs/how-to/ci-github-actions.md", "\n".join(re.findall(r"```yaml\n(.*?)```", guide, re.S))
 
     def test_actions_pinned_by_sha(self):
         for name, text in self.sources():
@@ -397,6 +402,13 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(entry["source"], "./")
         self.assertNotIn("version", entry, "the version lives in plugin.json; two copies end up out of sync")
 
+    def test_the_version_has_its_upgrade_note(self):
+        # One check for every release, instead of a version pinned in each release's acceptance tests.
+        import upgrade
+        newest = max(upgrade.NOTES, key=lambda v: tuple(int(x) for x in v.split(".")))
+        self.assertEqual(self.plugin["version"], newest, "a release adds its note to upgrade.NOTES")
+        self.assertTrue(upgrade.NOTES[newest])
+
     def test_init_uses_the_installer(self):
         fm, body = frontmatter(ROOT / "plugin" / "commands" / "init.md")
         self.assertEqual(fm.get("model"), "sonnet")
@@ -406,15 +418,13 @@ class PluginTests(unittest.TestCase):
             self.assertIn(flag, fm.get("argument-hint", ""))
 
     def test_what_is_installed_exists(self):
-        src = AGENTIC.read_text(encoding="utf-8")
-        globs = re.findall(r'"(\.claude/[^"]+)"', re.search(r"INSTALL_GLOBS = \[(.*?)\]", src, re.S).group(1))
+        globs = installer.INSTALL_GLOBS
         for pattern in globs:
             with self.subTest(patron=pattern):
                 self.assertTrue(list(ROOT.glob(pattern)), "the installer would copy nothing")
 
 
-    @unittest.skipUnless((ROOT / "README.md").read_text(encoding="utf-8").startswith("<!-- agentic-flow-template -->"),
-                         "the flow's own repo: a project's README and its own skills are not the flow's to check")
+    @FLOW_REPO_ONLY  # a project's README and its own skills are not the flow's to check
     def test_shipped_skills_are_valid_and_credited(self):
         skills = sorted((CLAUDE / "skills").glob("*/SKILL.md"))
         self.assertTrue(skills)
@@ -426,6 +436,49 @@ class PluginTests(unittest.TestCase):
                 self.assertTrue(fm.get("description"))
                 self.assertIn(f"`/{path.parent.name}`", readme, "listed in What's inside")
                 self.assertIn("MIT", body, "third-party skills keep their licence notice")
+
+
+class StructureTests(unittest.TestCase):
+    """agentic.py is the entry point: a dispatch table and re-exports; the code lives in the modules by domain."""
+    MODULES = ["core", "manifest_check", "repo_scan", "verification", "stage", "installer", "launch", "guardrail"]
+    REEXPORTS = {
+        "core": ["ROOT", "GUARD_DIR", "QUALITY_BASELINE", "SKIP_DIRS", "USAGE", "is_flow_repo", "maintainer_mode",
+                 "never_owned_problem", "flow_path_refused", "locked_json", "usage_records", "status_to_state"],
+        "manifest_check": ["validate", "frontmatter_model", "require_valid"], "repo_scan": ["PATH_RE"],
+        "verification": ["attribute", "run_command", "quality_files"], "installer": ["merge_settings"],
+        "launch": ["structured_report", "run_steps", "render_prompt", "release_guard", "load_spec"],
+    }
+
+    @FLOW_REPO_ONLY  # a project's code is its own; the ratchet there is the project's baseline
+    def test_quality_is_green(self):
+        r = subprocess.run([sys.executable, str(AGENTIC), "quality"], cwd=ROOT, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+        self.assertEqual(r.returncode, 0, r.stdout[-2000:])
+
+    def test_reexports_are_the_modules_objects(self):
+        import importlib
+        for module, names in self.REEXPORTS.items():
+            mod = importlib.import_module(module)
+            for name in names:
+                with self.subTest(name=name):
+                    self.assertIs(getattr(agentic, name), getattr(mod, name))
+        src = AGENTIC.read_text(encoding="utf-8")
+        for module in self.MODULES:
+            self.assertIn(f"from {module} import", src)
+        for name in ("validate", "install", "guard", "check_stage", "run_pipeline", "hook"):
+            self.assertNotIn(f"\ndef {name}(", src, "a moved function must not keep a copy in agentic.py")
+
+    def test_commands_match_the_docstring(self):
+        listed = set(re.findall(r"^  ([a-z][\w-]+)", agentic.__doc__.split("Subcommands:")[1], re.M))
+        self.assertEqual(set(agentic.COMMANDS), listed)
+        self.assertEqual(len(agentic.COMMANDS), 34)
+
+    @FLOW_REPO_ONLY  # a project does not carry the flow's own guides
+    def test_docs_list_every_module(self):
+        tree = (ROOT / "docs/how-it-works.md").read_text(encoding="utf-8")
+        for module in self.MODULES:
+            with self.subTest(module=module):
+                self.assertIn(f"── {module}.py", tree)
 
 
 class DocumentationDriftTests(unittest.TestCase):

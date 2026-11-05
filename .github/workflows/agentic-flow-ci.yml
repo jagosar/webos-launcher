@@ -38,7 +38,7 @@ jobs:
         python: ["3.9", "3.12", "3.14"]
         include:
           - {os: windows-latest, python: "3.12"}
-          - {os: macos-latest, python: "3.12"}
+        # macOS is not in the matrix: nobody here uses it, and its scarce runners queued past the job's time limit.
     defaults:
       run:
         shell: bash  # Git Bash on Windows, as Claude Code uses there
@@ -67,6 +67,9 @@ jobs:
           suite bench/acceptance python -m unittest discover -s bench/acceptance -v
           suite acceptance python -m unittest discover -s acceptance -v
           suite qa python -m unittest discover -s qa -v
+      # The clean-code ratchet: nothing may get worse than .claude/quality-baseline.json (skipped without one).
+      - name: Clean-code ratchet
+        run: python .claude/bin/agentic.py quality
       # The failures as one annotation, readable on the pull request and through the API without the full log.
       - name: Failures as an annotation
         if: failure()
@@ -74,6 +77,44 @@ jobs:
           detail=$(tr -d '\r' < "$RUNNER_TEMP/unittest.txt" | sed -n '/^=\{20,\}$/,/^Ran /p' | head -c 3500)
           detail=${detail//'%'/'%25'}
           echo "::error title=unittest failures::${detail//$'\n'/'%0A'}"
+
+  # The flow as a project receives it: installed into an empty repository, where the shipped tests must pass
+  # too. A test that only holds in this repository (its README, its skills, its own scripts) is caught here.
+  installed:
+    if: github.repository == 'jagosar/agentic-flow'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - run: git config --global init.defaultBranch main
+      - name: Install into an empty project and run the shipped tests there
+        run: |
+          project="$RUNNER_TEMP/project"
+          mkdir -p "$project" && cd "$project" && git init -q
+          printf 'def main():\n    return 1\n' > main.py
+          # The shape of a project made from the template: the plugin files, this workflow and the flow's test
+          # suite (install ships the whole suite wherever any part is present), but not the README marker and not
+          # the per-release acceptance tests, which check this repository's own docs.
+          printf '# Project\n' > README.md
+          mkdir -p .claude/bin .claude-plugin plugin/commands .github/workflows
+          cp "$GITHUB_WORKSPACE/.claude/bin/testutil.py" .claude/bin/
+          cp "$GITHUB_WORKSPACE"/.claude-plugin/*.json .claude-plugin/
+          cp "$GITHUB_WORKSPACE"/plugin/commands/*.md plugin/commands/
+          cp "$GITHUB_WORKSPACE/.github/workflows/agentic-flow-ci.yml" .github/workflows/
+          git add -A && git -c user.name=ci -c user.email=ci@example.com commit -qm init
+          python "$GITHUB_WORKSPACE/.claude/bin/agentic.py" install .
+          test -f .claude/bin/test_agentic.py || { echo "install shipped no tests"; exit 1; }
+          python .claude/bin/agentic.py quality
+          python -m unittest discover -s .claude/bin -p "test_*.py"
+          node .claude/bin/test_workflow.mjs
 
   plugin:
     if: github.repository == 'jagosar/agentic-flow'

@@ -90,6 +90,32 @@ NOTES = {
         "test_definitions.py no longer fails in a project: its check that every skill is listed and credited in the "
         "README ran against the project's README and the project's own skills; it now runs only in the flow's repo.",
     ],
+    "2.7.0": [
+        "A clean-code ratchet: install creates .claude/quality-baseline.json from your code as it is (commit it), and "
+        "verify gains a quality phase that fails when a function gets longer or deeper, a file grows, or long lines "
+        "are added, against that baseline (limits: 60-line functions, 100 in tests, nesting 4, 800-line files, "
+        "120 characters). A package that makes the code worse is sent back. Lower the baseline with "
+        "`agentic.py quality --update`; to accept something worse on purpose, edit the JSON by hand. "
+        "Agents cannot write it.",
+        "The hook no longer blocks commands that only mention a path such as .claude/bin next to a -p flag "
+        "(unittest's). Maintainer mode (2.5.0) works for runs by hand only: Claude Code protects .claude/ from agents "
+        "started with claude -p, and allow rules do not lift it.",
+    ],
+    "2.7.1": [
+        "The shipped tests no longer fail in a project: test_agentic.py's check that the flow measures its own "
+        "scripts, and test_definitions.py's check of the shipped skills, hold only in the flow's repo and now run "
+        "only there (the latter also broke the import of its whole file in a project with no README).",
+        "The shipped CI workflow (.github/workflows/agentic-flow-ci.yml, refreshed where yours is intact) drops macOS "
+        "from its matrix and gains a job that installs the flow into an empty project and runs the shipped tests "
+        "there; that job runs only in the agentic-flow repository.",
+    ],
+    "2.8.0": [
+        "agentic.py is split into modules by domain, installed beside it: core.py, manifest_check.py, repo_scan.py, "
+        "verification.py, stage.py, installer.py, launch.py and guardrail.py. Every command, argument, message and "
+        "exit code is the same; agentic.py keeps the command table and the names tests read. If install kept an "
+        "edited agentic.py of yours, it is the old self-contained file and keeps working alone; the new modules sit "
+        "beside it unused until you take the new agentic.py from .claude/state/upgrade/.",
+    ],
     "2.2.0": [
         "The reviewer reads beyond the diff: a deterministic `callers` step lists, for every public symbol defined "
         "in a changed file (the code map's regexes, ten languages), the lines of tracked code outside the diff that "

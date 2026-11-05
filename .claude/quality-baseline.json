@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "flow_repo": false,
+  "limits": {
+    "function_lines": 60,
+    "test_function_lines": 100,
+    "nesting": 4,
+    "file_lines": 800,
+    "file_growth": 30,
+    "line_chars": 120
+  },
+  "exclude": [],
+  "files": {
+    "docs/assets/make_flow_gif.py": {
+      "lines": 413,
+      "long_lines": 2
+    },
+    "docs/assets/make_screens.py": {
+      "lines": 235,
+      "long_lines": 6
+    },
+    "launcher/acceptance/build2.test.ts": {
+      "lines": 87,
+      "long_lines": 3
+    },
+    "launcher/acceptance/clock12.test.ts": {
+      "lines": 26,
+      "long_lines": 6
+    },
+    "launcher/acceptance/config.test.ts": {
+      "lines": 103,
+      "long_lines": 1
+    },
+    "launcher/acceptance/remote.test.ts": {
+      "lines": 214,
+      "long_lines": 4
+    },
+    "launcher/acceptance/weather.test.ts": {
+      "lines": 61,
+      "long_lines": 1
+    },
+    "launcher/qa/e2e.test.ts": {
+      "lines": 261,
+      "long_lines": 3
+    },
+    "launcher/qa/edge.test.ts": {
+      "lines": 627,
+      "long_lines": 10
+    },
+    "launcher/src/config.test.ts": {
+      "lines": 90,
+      "long_lines": 1
+    },
+    "launcher/src/weather-icons.ts": {
+      "lines": 28,
+      "long_lines": 2
+    },
+    "launcher/src/weather.test.ts": {
+      "lines": 124,
+      "long_lines": 1
+    }
+  },
+  "functions": {
+    "launcher/src/main.ts::startLauncher": {
+      "lines": 128,
+      "nesting": 1
+    },
+    "launcher/src/view.ts::createLauncherView": {
+      "lines": 126,
+      "nesting": 1
+    }
+  }
+}

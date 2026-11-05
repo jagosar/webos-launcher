@@ -20,6 +20,8 @@ from unittest import mock
 SCRIPT = Path(__file__).resolve().parent / "agentic.py"
 sys.path.insert(0, str(SCRIPT.parent))
 import agentic  # noqa: E402
+import core  # noqa: E402
+import launch  # noqa: E402
 import testutil  # noqa: E402
 
 # The manifests' commands run this interpreter: on Windows `python3` may be missing or the Store stub.
@@ -148,7 +150,7 @@ class UsageLockTests(unittest.TestCase):
             locked_paths.append(Path(fh.name).name)
             return real_locked(fh)
 
-        with mock.patch.object(agentic, "USAGE", usage), mock.patch.object(agentic.compat, "locked", spy):
+        with mock.patch.object(core, "USAGE", usage), mock.patch.object(agentic.compat, "locked", spy):
             self.assertEqual(agentic.usage_records(), [{"id": "WP-01"}])
         self.assertIn("usage.jsonl", locked_paths)
 
@@ -1269,7 +1271,9 @@ class HookBashTests(Base):
         "git commit -am x", "git -C . commit -am x", "git -c user.name=x commit -m y", "command git push",
         "sh -c 'git commit -m x'", 'bash -c "git checkout main"', "cd src && git add .", "git stash",
         "npm install lodash", "cd x && pnpm add zod", "pip install requests", "uv add httpx",
-        "claude -p hola", "claude --print hola",
+        "claude -p hola", "claude --print hola", "cd x && claude -p hola", "/usr/local/bin/claude -p hola",
+        "npx @anthropic-ai/claude-code -p hola",
+        "python3 .claude/bin/agentic.py quality --update", "python3 .claude/bin/agentic.py quality --init",
         "pip3.12 install requests", "yarn", "python3 -m pip install x", "echo 'src/' >> .git/info/exclude",
         "cp hook .git/hooks/pre-commit", "printf '[core]' >> .git/config",
     ]
@@ -1277,6 +1281,10 @@ class HookBashTests(Base):
         "git status", "git diff src/add.py", "git log --oneline -5", "git show HEAD:src/a.py",
         "python3 -m unittest tests.test_a", "npm test", "npm run build", "grep -r commit src",
         "claude --version",
+        # A path that contains "claude" is not a Claude session, even with a -p flag later on the line.
+        "python3 -m unittest discover -s .claude/bin -p test_acceptance_v27.py",
+        "ls ~/.claude/projects -p", "cat docs/claude-notes.md | grep -p x",
+        "python3 .claude/bin/agentic.py quality", "grep -- --update docs/quality.md",
     ]
 
     def test_blocked(self):
@@ -1729,9 +1737,9 @@ class MaintainerModeTests(unittest.TestCase):
         self.assertFalse(agentic.is_flow_repo(d))
 
     def test_the_flag_only_counts_in_the_flow_repo(self):
-        with mock.patch.object(agentic, "is_flow_repo", return_value=False):
+        with mock.patch.object(core, "is_flow_repo", return_value=False):
             self.assertFalse(agentic.maintainer_mode({"maintainer": True}))
-        with mock.patch.object(agentic, "is_flow_repo", return_value=True):
+        with mock.patch.object(core, "is_flow_repo", return_value=True):
             self.assertTrue(agentic.maintainer_mode({"maintainer": True}))
             self.assertFalse(agentic.maintainer_mode({"maintainer": "true"}))
             self.assertFalse(agentic.maintainer_mode({}))
@@ -1761,7 +1769,7 @@ class MaintainerModeTests(unittest.TestCase):
 
     def test_releasing_with_nothing_active_is_fine(self):
         d = self.flow_dir()
-        with mock.patch.object(agentic, "ROOT", d):
+        with mock.patch.object(launch, "ROOT", d):
             agentic.release_guard()
         self.assertFalse((d / agentic.GUARD_DIR / "active.json").exists())
 
@@ -1796,6 +1804,48 @@ class MaintainerModeTests(unittest.TestCase):
         ok, results = agentic.run_steps([["guard-release"]], script=script)
         self.assertTrue(ok)
         self.assertEqual(results[0]["output"], "fake guard-release")
+
+
+
+class QualityCommandTests(Base):
+    """agentic.py quality: the edges the acceptance tests leave out."""
+
+    def big(self, lines):
+        return "def big():\n" + "    x = 1\n" * (lines - 1)
+
+    def test_an_unreadable_baseline_fails_the_check(self):
+        self.repo.write(agentic.QUALITY_BASELINE, "{not json")
+        r = self.repo.run("quality")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("FAIL quality baseline unreadable", r.stdout)
+
+    def test_update_without_a_baseline_is_an_error(self):
+        self.assertEqual(self.repo.run("quality", "--update").returncode, 1)
+
+    def test_unknown_arguments_are_refused(self):
+        self.assertNotEqual(self.repo.run("quality", "--force").returncode, 0)
+
+    def test_excluded_paths_are_not_measured(self):
+        self.repo.write("generated/lib.py", self.big(80))
+        self.repo.write("src/a.py", self.big(5))
+        self.assertEqual(self.repo.run("quality", "--init").returncode, 0)
+        path = self.repo.dir / agentic.QUALITY_BASELINE
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertIn("generated/lib.py::big", data["functions"])
+        data["exclude"] = ["generated"]
+        path.write_text(json.dumps(data), encoding="utf-8")
+        self.repo.write("generated/lib.py", self.big(120))
+        r = self.repo.run("quality")
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    @unittest.skipUnless(agentic.is_flow_repo(agentic.ROOT), "the flow's own repo: a project does not measure the flow")
+    def test_the_flow_repo_measures_its_own_scripts(self):
+        files = agentic.quality_files()
+        self.assertIn(".claude/bin/quality.py", files)
+        self.assertIn(".claude/workflows/agentic-implement.js", files)
+
+    def test_the_baseline_is_never_owned(self):
+        self.assertIsNotNone(agentic.never_owned_problem(agentic.QUALITY_BASELINE))
 
 
 if __name__ == "__main__":
