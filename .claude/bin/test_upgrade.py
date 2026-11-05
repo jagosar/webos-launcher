@@ -192,5 +192,66 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(upgrade.load_history(tmp), {"a": {"h"}})
 
 
+
+class GapTests(unittest.TestCase):
+    """release_tags, history_gaps and release_notes: what `flow-history --check` and `release-notes` stand on."""
+
+    def repo(self):
+        repo = Repo()
+        self.addCleanup(shutil.rmtree, repo.dir, ignore_errors=True)
+        return repo
+
+    def tag(self, repo, name):
+        subprocess.run(["git", "tag", name], cwd=repo.dir, check=True)
+
+    def test_release_tags_are_sorted_by_version_and_skip_non_versions(self):
+        repo = self.repo()
+        repo.commit({"a.md": "A\n"})
+        for name in ("agentic-flow--v2.10.0", "agentic-flow--v2.9.0", "agentic-flow--vnext", "other-v1.0.0"):
+            self.tag(repo, name)
+        self.assertEqual(upgrade.release_tags(repo.dir), ["agentic-flow--v2.9.0", "agentic-flow--v2.10.0"])
+
+    def test_release_tags_without_git_is_empty(self):
+        plain = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, plain, ignore_errors=True)
+        self.assertEqual(upgrade.release_tags(plain), [])
+
+    def test_gaps_list_unknown_contents_by_ref_then_path(self):
+        repo = self.repo()
+        repo.commit({"b.md": "B\n", "a.md": "A\n", "skip.txt": "S\n"})
+        self.tag(repo, "one")
+        repo.commit({"a.md": "A2\n", "b.md": "B2\n"})
+        history = {"a.md": {sha("A\n")}, "b.md": {sha("B\n"), sha("B2\n")}}
+        gaps = upgrade.history_gaps(repo.dir, ["*.md"], history, ["HEAD", "one"])
+        self.assertEqual(gaps, [{"ref": "HEAD", "path": "a.md"}])
+        self.assertEqual(upgrade.history_gaps(repo.dir, ["*.md"], {}, ["one"]),
+                         [{"ref": "one", "path": "a.md"}, {"ref": "one", "path": "b.md"}])
+
+    def test_gaps_read_crlf_as_lf(self):
+        repo = self.repo()
+        (repo.dir / "a.md").write_bytes(b"A\r\n")
+        subprocess.run(["git", "-c", "core.autocrlf=false", "add", "-A"], cwd=repo.dir, check=True)
+        subprocess.run(GIT + ["-c", "core.autocrlf=false", "commit", "-qm", "c"], cwd=repo.dir, check=True)
+        self.assertEqual(upgrade.history_gaps(repo.dir, ["*.md"], {"a.md": {sha("A\n")}}, ["HEAD"]), [])
+
+    def test_gaps_refuse_a_shallow_clone(self):
+        repo = self.repo()
+        repo.commit({"a.md": "A\n"})
+        repo.commit({"a.md": "B\n"})
+        clone = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, clone, ignore_errors=True)
+        subprocess.run(["git", "clone", "-q", "--depth", "1", repo.dir.as_uri(), str(clone / "c")], check=True)
+        with self.assertRaisesRegex(ValueError, "needs the full git history"):
+            upgrade.history_gaps(clone / "c", ["*.md"], {}, ["HEAD"])
+
+    def test_release_notes_are_a_markdown_list_of_one_version(self):
+        with mock.patch.dict(upgrade.NOTES, {"9.0.0": ["one", "two"], "9.0.1": ["three"]}):
+            self.assertEqual(upgrade.release_notes("9.0.0"), "- one\n- two\n")
+        with mock.patch.dict(upgrade.NOTES, {"9.0.2": []}):
+            for version in ("9.0.2", "9.9.9"):
+                with self.subTest(version=version):
+                    with self.assertRaisesRegex(ValueError, f"no upgrade notes for {version}"):
+                        upgrade.release_notes(version)
+
 if __name__ == "__main__":
     unittest.main()

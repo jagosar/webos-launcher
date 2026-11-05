@@ -9,9 +9,9 @@ on:
   # runners) for every change.
   push:
     branches: [main]
-    paths: [".claude/**", ".claude-plugin/**", "plugin/**", "docs/**", "*.md", ".github/workflows/agentic-flow-ci.yml", "bench/**", ".github/workflows/agentic-bench.yml"]
+    paths: [".claude/**", ".claude-plugin/**", "plugin/**", "docs/**", "*.md", ".github/workflows/agentic-flow-ci.yml", "bench/**", ".github/workflows/agentic-bench.yml", ".github/workflows/agentic-flow-release.yml"]
   pull_request:
-    paths: [".claude/**", ".claude-plugin/**", "plugin/**", "docs/**", "*.md", ".github/workflows/agentic-flow-ci.yml", "bench/**", ".github/workflows/agentic-bench.yml"]
+    paths: [".claude/**", ".claude-plugin/**", "plugin/**", "docs/**", "*.md", ".github/workflows/agentic-flow-ci.yml", "bench/**", ".github/workflows/agentic-bench.yml", ".github/workflows/agentic-flow-release.yml"]
   # The full matrix on demand, for a pull request that touches platform code (Actions tab, "Run workflow").
   workflow_dispatch:
 
@@ -115,6 +115,24 @@ jobs:
           python .claude/bin/agentic.py quality
           python -m unittest discover -s .claude/bin -p "test_*.py"
           node .claude/bin/test_workflow.mjs
+
+  # The flow history must recognise every published version, and the pending one while plugin.json carries an
+  # untagged version (a release pull request regenerates it as its last commit). It needs the whole history and the
+  # tags, so it runs once on a full clone instead of in the shallow matrix.
+  history:
+    if: github.repository == 'jagosar/agentic-flow'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Flow history covers every published version
+        run: python .claude/bin/agentic.py flow-history --check
 
   plugin:
     if: github.repository == 'jagosar/agentic-flow'
