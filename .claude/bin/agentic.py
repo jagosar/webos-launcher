@@ -72,8 +72,8 @@ import compat  # noqa: E402  - the operating-system layer, next to this file
 from core import (  # noqa: E402
     ARCH, ARCHIVE_DIR, GUARD_DIR, LEDGER_MD, LEDGER_STATES, QUALITY_BASELINE, ROOT, SKIP_DIRS, STATE, USAGE,
     ManifestError, die, entities, flow_path_refused, is_flow_repo, ledger_read, ledger_render, ledger_update,
-    load_manifest, locked_json, maintainer_mode, never_owned_problem, now_hm, stage_of, status_to_state, stop,
-    usage_records, with_claims,
+    load_manifest, locked_json, maintainer_mode, never_owned_problem, now_hm, root_drift, stage_of, status_to_state,
+    stop, usage_records, with_claims,
 )
 from manifest_check import frontmatter_model, known_packs, require_valid, validate  # noqa: E402
 from repo_scan import PATH_RE, callers, codemap, declared_stack, detect_stack, docs_check, rules_sync  # noqa: E402
@@ -320,11 +320,17 @@ COMMANDS = {
 }
 
 
+ROOT_FREE_COMMANDS = {"install", "flow-history"}  # they act on their target and the source, never on ROOT
+
+
 def main():
     """The entry point: the handler of the command, whose int result (if any) is the exit code."""
     compat.utf8_stdio()
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
         die(__doc__)
+    problem = None if sys.argv[1] in ROOT_FREE_COMMANDS else root_drift()
+    if problem:
+        die(problem)
     code = COMMANDS[sys.argv[1]](sys.argv[2:])
     if isinstance(code, int):
         sys.exit(code)

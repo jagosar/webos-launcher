@@ -121,6 +121,21 @@ SECRET_RES = [
 ]
 
 
+def root_drift():
+    """Why this call would act on the wrong repository, or None. CLAUDE_PROJECT_DIR follows a session's working
+    directory, and in a cloud session that directory moves between tool calls: a command run from inside one repository
+    while the variable still names another would validate, measure or rewrite the other one. The signature: the
+    variable is set, this script belongs to a different repository, and the working directory is not inside the one
+    the variable names. (install and flow-history act on their target and the source: agentic.py exempts them.)"""
+    if not os.environ.get("CLAUDE_PROJECT_DIR") or SOURCE_ROOT.resolve() == ROOT.resolve():
+        return None
+    cwd, root = Path.cwd().resolve(), ROOT.resolve()
+    if cwd == root or root in cwd.parents:
+        return None
+    return (f"CLAUDE_PROJECT_DIR names {ROOT}, but this agentic.py belongs to {SOURCE_ROOT} and the working directory "
+            f"is {cwd}: the command would act on {ROOT}. Run it from inside that repository, or unset the variable.")
+
+
 # ---------- errors and configuration ----------
 
 class ManifestError(Exception):
