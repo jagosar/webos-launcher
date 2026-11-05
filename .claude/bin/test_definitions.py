@@ -344,6 +344,9 @@ class CIHardeningTests(unittest.TestCase):
 
     def sources(self):
         yield ".github/workflows/agentic-flow-ci.yml", (ROOT / ".github/workflows/agentic-flow-ci.yml").read_text(encoding="utf-8")
+        release = ROOT / ".github/workflows/agentic-flow-release.yml"
+        if release.exists():  # the flow's own release workflow; projects do not carry it
+            yield ".github/workflows/agentic-flow-release.yml", release.read_text(encoding="utf-8")
         guide_path = ROOT / "docs/how-to/ci-github-actions.md"
         if guide_path.exists():  # a project may not carry the flow's guides; its copy of the CI file is still checked
             guide = guide_path.read_text(encoding="utf-8")
@@ -471,7 +474,7 @@ class StructureTests(unittest.TestCase):
     def test_commands_match_the_docstring(self):
         listed = set(re.findall(r"^  ([a-z][\w-]+)", agentic.__doc__.split("Subcommands:")[1], re.M))
         self.assertEqual(set(agentic.COMMANDS), listed)
-        self.assertEqual(len(agentic.COMMANDS), 34)
+        self.assertEqual(len(agentic.COMMANDS), 35)
 
     @FLOW_REPO_ONLY  # a project does not carry the flow's own guides
     def test_docs_list_every_module(self):

@@ -16,6 +16,9 @@ EXTRA_GLOBS = [".claude/bin/test_*.py", ".claude/bin/testutil.py", ".claude/bin/
                ".claude/bin/fixtures/*", ".github/workflows/agentic-flow-ci.yml", ".github/workflows/reset-readme.yml",
                "plugin/commands/*.md", ".claude-plugin/*.json"]
 
+# The release tags: TAG_PREFIX + the version in .claude-plugin/plugin.json.
+TAG_PREFIX = "agentic-flow--v"
+
 # What a user upgrading from an older version must know, by the version that introduced it.
 NOTES = {
     "1.1.0": [
@@ -121,6 +124,14 @@ NOTES = {
         "variable follows its working directory, which moves between tool calls) is refused, with both paths in the "
         "message, instead of validating, measuring or rewriting the other repository. install and flow-history, which "
         "act on their target and the source, are exempt.",
+    ],
+    "2.9.0": [
+        "Maintainers: `agentic.py flow-history --check` says whether .claude/flow-history.json recognises every "
+        "published version and, while plugin.json carries an untagged version, the current content (exit 3 if not), "
+        "and `agentic.py release-notes [VERSION]` prints a version's upgrade notes. Projects see no change in "
+        "behaviour.",
+        "The shipped CI workflow gains a `history` job that only runs in the agentic-flow repository; install "
+        "refreshes the file where yours is intact.",
     ],
     "2.2.0": [
         "The reviewer reads beyond the diff: a deterministic `callers` step lists, for every public symbol defined "
@@ -246,29 +257,75 @@ def guard_problems(target, paths):
     return problems
 
 
-def build_history(repo_root, globs):
-    """Every content each path matching globs ever had in repo_root's history, as sha256 lists."""
-    root = Path(repo_root)
+def require_full_history(root):
+    """Raises ValueError unless root is a git work tree with its whole history (a shallow clone cannot answer)."""
     if git(root, "rev-parse", "--is-inside-work-tree").stdout.strip() != "true":
         raise ValueError("not a git repository")
     if git(root, "rev-parse", "--is-shallow-repository").stdout.strip() == "true":
         raise ValueError("needs the full git history: run `git fetch --unshallow` (or use a full clone)")
-    paths_of = {}  # blob -> the matching paths that held it
-    for commit in git(root, "rev-list", "HEAD").stdout.split():
-        for line in git(root, "ls-tree", "-r", commit).stdout.splitlines():
-            meta, path = line.split("\t", 1)
-            _, kind, blob = meta.split()
-            if kind == "blob" and any(fnmatch.fnmatch(path, g) for g in globs):
-                paths_of.setdefault(blob, set()).add(path)
-    blobs = sorted(paths_of)
+
+
+def matching_blobs(root, ref, globs):
+    """[(path, blob)] of the files of ref whose path matches a glob."""
+    found = []
+    for line in git(root, "ls-tree", "-r", ref).stdout.splitlines():
+        meta, path = line.split("\t", 1)
+        _, kind, blob = meta.split()
+        if kind == "blob" and any(fnmatch.fnmatch(path, g) for g in globs):
+            found.append((path, blob))
+    return found
+
+
+def _hashes(root, blobs):
+    """{blob: sha256 of its content with CRLF read as LF}, all read in one `git cat-file --batch` call."""
+    blobs = sorted(set(blobs))
     out = git(root, "cat-file", "--batch", input="".join(b + "\n" for b in blobs).encode(), text=False).stdout
-    files, pos = {}, 0
+    digests, pos = {}, 0
     for blob in blobs:  # each answer: "<sha> blob <size>\n<content>\n"
         end = out.index(b"\n", pos)
         size = int(out[pos:end].split()[2])
-        digest = hashlib.sha256(out[end + 1:end + 1 + size].replace(b"\r\n", b"\n")).hexdigest()  # as compat.content_hash
+        digests[blob] = hashlib.sha256(out[end + 1:end + 1 + size].replace(b"\r\n", b"\n")).hexdigest()  # as compat.content_hash
         pos = end + 1 + size + 1
+    return digests
+
+
+def build_history(repo_root, globs):
+    """Every content each path matching globs ever had in repo_root's history, as sha256 lists."""
+    root = Path(repo_root)
+    require_full_history(root)
+    paths_of = {}  # blob -> the matching paths that held it
+    for commit in git(root, "rev-list", "HEAD").stdout.split():
+        for path, blob in matching_blobs(root, commit, globs):
+            paths_of.setdefault(blob, set()).add(path)
+    files = {}
+    for blob, digest in _hashes(root, paths_of).items():
         for path in paths_of[blob]:
             files.setdefault(path, set()).add(digest)
     head = git(root, "rev-parse", "HEAD").stdout.strip()
     return {"generated_from": head, "files": {p: sorted(h) for p, h in sorted(files.items())}}
+
+
+def release_tags(repo_root):
+    """The TAG_PREFIX tags of repo_root whose suffix is a version, oldest version first; [] without git or tags."""
+    names = git(Path(repo_root), "tag", "-l", TAG_PREFIX + "*").stdout.split()
+    tags = [name for name in names if version_key(name[len(TAG_PREFIX):]) is not None]
+    return sorted(tags, key=lambda name: version_key(name[len(TAG_PREFIX):]))
+
+
+def history_gaps(repo_root, globs, history, refs):
+    """[{"ref", "path"}] for every file of each ref (in the order given, then by path) that matches a glob and whose
+    content is not among history.get(path). Raises ValueError like build_history without git or the full history."""
+    root = Path(repo_root)
+    require_full_history(root)
+    files = {ref: sorted(matching_blobs(root, ref, globs)) for ref in refs}
+    digests = _hashes(root, [blob for found in files.values() for _, blob in found])
+    return [{"ref": ref, "path": path} for ref in refs for path, blob in files[ref]
+            if digests[blob] not in history.get(path, set())]
+
+
+def release_notes(version):
+    """NOTES[version] as a Markdown list, one "- note" line each. Raises ValueError when the version has none."""
+    notes = NOTES.get(version)
+    if not notes:
+        raise ValueError(f"no upgrade notes for {version}")
+    return "".join(f"- {note}\n" for note in notes)

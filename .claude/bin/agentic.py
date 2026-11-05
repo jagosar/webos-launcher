@@ -41,7 +41,11 @@ Subcommands:
   install [DIR] [--force] [--dry-run] [--allow-dirty]
                       Installs or upgrades the flow in another repo (used by the plugin). Replaces only intact files,
                       keeps edited ones (new version in .claude/state/upgrade/), refuses over uncommitted changes or a run.
-  flow-history        Maintainers: writes .claude/flow-history.json, every content the flow ever shipped, from git.
+  flow-history [--check]
+                      Maintainers: writes .claude/flow-history.json, every content the flow ever shipped, from git.
+                      --check writes nothing: exit 3 if a published version (or plugin.json's untagged one) is missing.
+  release-notes [VERSION]
+                      Maintainers: the upgrade notes of VERSION (plugin.json's by default) as a Markdown list.
   claim ID            Binds the current subagent to a WP or to QA (recorded by the hook).
   status              Shows the ledger: the state of every agent and stage.
   mark ID ESTADO [NOTA]
@@ -72,14 +76,16 @@ import compat  # noqa: E402  - the operating-system layer, next to this file
 from core import (  # noqa: E402
     ARCH, ARCHIVE_DIR, GUARD_DIR, LEDGER_MD, LEDGER_STATES, QUALITY_BASELINE, ROOT, SKIP_DIRS, STATE, USAGE,
     ManifestError, die, entities, flow_path_refused, is_flow_repo, ledger_read, ledger_render, ledger_update,
-    load_manifest, locked_json, maintainer_mode, never_owned_problem, now_hm, root_drift, stage_of, status_to_state,
-    stop, usage_records, with_claims,
+    load_manifest, locked_json, maintainer_mode, never_owned_problem, now_hm, root_drift, sibling, stage_of,
+    status_to_state, stop, usage_records, with_claims,
 )
 from manifest_check import frontmatter_model, known_packs, require_valid, validate  # noqa: E402
 from repo_scan import PATH_RE, callers, codemap, declared_stack, detect_stack, docs_check, rules_sync  # noqa: E402
 from verification import acceptance, attribute, baseline, quality, quality_files, run_command, verify  # noqa: E402
 from stage import STAGE_LABELS, check_stage, close_stage, open_stage, snapshot, stage_label  # noqa: E402
-from installer import RESULT_FILE, flow_history, install, merge_settings, sync_permissions  # noqa: E402
+from installer import (  # noqa: E402
+    RESULT_FILE, flow_history, flow_history_check, flow_version, install, merge_settings, sync_permissions,
+)
 from launch import (  # noqa: E402
     load_spec, pipeline_plan, release_guard, render_prompt, run_acceptance, run_docs, run_pipeline, run_qa,
     run_review, run_steps, run_wave, seq, structured_report, write_briefs,
@@ -264,9 +270,23 @@ def cmd_install(args):
 
 
 def cmd_flow_history(args):
-    if args:
-        die("Uso: flow-history")
-    print(json.dumps(flow_history()))
+    if args not in ([], ["--check"]):
+        die("Uso: flow-history [--check]")
+    if not args:
+        print(json.dumps(flow_history()))
+        return 0
+    summary = flow_history_check()
+    print(json.dumps(summary))
+    return 0 if summary["ok"] else 3
+
+
+def cmd_release_notes(args):
+    if len(args) > 1:
+        die("Uso: release-notes [VERSION]")
+    try:
+        print(sibling("upgrade").release_notes(args[0] if args else flow_version()), end="")
+    except ValueError as e:
+        die(str(e))
 
 
 def cmd_run_acceptance(args):
@@ -314,13 +334,14 @@ COMMANDS = {
     "verify": cmd_verify, "baseline": cmd_baseline, "save-result": cmd_save_result,
     "sync-permissions": cmd_sync_permissions, "run-docs": cmd_run_docs, "stack": cmd_stack,
     "rules-sync": cmd_rules_sync, "callers": cmd_callers, "codemap": cmd_codemap, "docs-check": cmd_docs_check,
-    "install": cmd_install, "flow-history": cmd_flow_history, "run-acceptance": cmd_run_acceptance,
-    "run-review": cmd_run_review, "acceptance": cmd_acceptance, "snapshot": cmd_snapshot,
-    "check-wave": cmd_check_wave, "run-wave": cmd_run_wave,
+    "install": cmd_install, "flow-history": cmd_flow_history, "release-notes": cmd_release_notes,
+    "run-acceptance": cmd_run_acceptance, "run-review": cmd_run_review, "acceptance": cmd_acceptance,
+    "snapshot": cmd_snapshot, "check-wave": cmd_check_wave, "run-wave": cmd_run_wave,
 }
 
 
-ROOT_FREE_COMMANDS = {"install", "flow-history"}  # they act on their target and the source, never on ROOT
+# They act on their target and the source, never on ROOT.
+ROOT_FREE_COMMANDS = {"install", "flow-history", "release-notes"}
 
 
 def main():

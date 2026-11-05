@@ -292,3 +292,17 @@ def flow_history():
                                                                encoding="utf-8")
     return {"paths": len(data["files"]), "hashes": sum(len(h) for h in data["files"].values()),
             "generated_from": data["generated_from"]}
+
+
+def flow_history_check():
+    """Maintainers: whether .claude/flow-history.json recognises every published version, and the pending one (the
+    version in plugin.json while it has no tag: "HEAD" is checked too). Writes nothing. The summary."""
+    upgrade = sibling("upgrade")
+    try:
+        tags = upgrade.release_tags(SOURCE_ROOT)
+        pending = None if upgrade.TAG_PREFIX + flow_version() in tags else flow_version()
+        missing = upgrade.history_gaps(SOURCE_ROOT, INSTALL_GLOBS + upgrade.EXTRA_GLOBS,
+                                       upgrade.load_history(SOURCE_ROOT), tags + (["HEAD"] if pending else []))
+    except ValueError as e:
+        die(f"flow-history: {e}")
+    return {"ok": not missing, "tags": len(tags), "pending": pending, "missing": missing}
