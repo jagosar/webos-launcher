@@ -15,6 +15,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import waiting  # noqa: E402
 
+WAITING = Path(__file__).resolve().parent / "waiting.py"
+
 NOW = 1_800_000_000.0
 
 
@@ -114,6 +116,58 @@ class MainTests(StateDir):
                 self.assertEqual((r.returncode, r.stdout), (0, ""))
         self.assertEqual(len(waiting.current(self.state.parent / ".claude" / "state")), 1)
 
+
+
+class StatusTests(unittest.TestCase):
+    """From test_acceptance_waiting ac_001, ac_003, ac_004 and ac_005: the real hook, then agentic.py status."""
+
+    def setUp(self):
+        from test_agentic import Repo
+        self.repo = Repo()
+        self.addCleanup(self.repo.cleanup)
+
+    def hook(self, payload):
+        return subprocess.run([sys.executable, str(WAITING)], cwd=self.repo.dir, input=json.dumps(payload),
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", env=self.repo.env)
+
+    def claim(self, agent_id, ident):
+        self.repo.write(".claude/state/claims.json", json.dumps({agent_id: ident}))
+
+    def section(self):
+        out = self.repo.run("status").stdout
+        if "## Waiting for you" not in out:
+            return out, None
+        body = out.split("## Waiting for you", 1)[1].split("\n## ", 1)[0]
+        return out, [line for line in body.splitlines() if line.startswith("- ")]
+
+    def test_a_waiting_agent_is_listed_before_the_stages_until_it_moves_on(self):
+        self.claim("ag1", "WP-01")
+        r = self.hook(request("ag1", tool_input={"command": "npm run e2e"}))
+        self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
+        out, lines = self.section()
+        self.assertLess(out.index("## Waiting for you"), out.index("## Stages"))
+        self.assertRegex(lines[0], r"^- WP-01 \(implementer\) needs your permission for Bash: npm run e2e — "
+                                   r"waiting 0 min \(since \d\d:\d\d\)$")
+        self.hook({"hook_event_name": "PostToolUse", "agent_id": "ag1", "tool_name": "Bash"})
+        self.assertIsNone(self.section()[1])
+
+    def test_a_url_is_the_detail_of_a_web_request(self):
+        self.hook(request("x1", tool="WebFetch", tool_input={"url": "https://example.com"}))
+        self.assertTrue(any("WebFetch: https://example.com" in line for line in self.section()[1]))
+
+    def test_a_new_stage_clears_the_list(self):
+        self.claim("ag1", "WP-01")
+        self.hook(request("ag1"))
+        self.assertIsNotNone(self.section()[1])
+        self.assertEqual(self.repo.run("snapshot", "1").returncode, 0)
+        self.assertIsNone(self.section()[1])
+
+    def test_the_hook_imports_nothing_of_the_flow(self):
+        import ast
+        tree = ast.parse(WAITING.read_text(encoding="utf-8"))
+        imported = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+        imported |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
+        self.assertFalse(imported & {"agentic", "pipeline", "brief", "upgrade", "core"}, imported)
 
 if __name__ == "__main__":
     unittest.main()

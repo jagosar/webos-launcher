@@ -1,23 +1,20 @@
 """Launching the agents: one `claude -p` per agent with its schema and permissions, the one-off run-* commands, the
-workflow's seq, the fallback pipeline, pipeline-plan with the frozen guard of a maintainer run, and finish.
+workflow's seq, the fallback pipeline, pipeline-plan, and finish.
 """
-import hashlib
 import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compat  # noqa: E402  - the operating-system layer, next to this file
 from core import (  # noqa: E402
-    ARCH, BASE_TOOLS, ENTRY, FROZEN, GUARD_CMD, GUARD_DIR, HERE, LIVE_CMD, READ_ONLY_AGENTS, ROOT, STATE, USAGE,
+    ARCH, BASE_TOOLS, ENTRY, READ_ONLY_AGENTS, ROOT, STATE, USAGE,
     WORKER_MODEL, at_entity, child_env, codemap_path, die, docs_entity, entities, ledger_read, ledger_stage,
-    ledger_update, load_config, maintainer_mode, now_hm, qa_entity, sibling, stage_of, status_to_state,
+    ledger_update, load_config, now_hm, qa_entity, sibling, stage_of, status_to_state,
     usage_records, usage_summary, wps
 )
 from stage import check_stage, snapshot, stage_owners  # noqa: E402
@@ -37,12 +34,11 @@ SOURCE_RANK = {"one-off": 2, "per-agent": 1, "record": 0}
 SEQ_OUTPUT_CAP = 12_000
 
 SEQ_COMMANDS = {"pipeline-plan", "briefs", "baseline", "open-stage", "close-stage", "verify", "codemap", "docs-check",
-                "acceptance", "callers", "hooks-check", "guard-release"}
+                "acceptance", "callers", "hooks-check"}
 
 PIPELINE_STATE = STATE / "pipeline.json"
 
-# A frozen copy reads the spec frozen with it, so an agent that edits the live spec cannot change the run's prompts.
-PIPELINE_SPEC = (HERE.parent if FROZEN else ROOT / ".claude") / "workflows" / "pipeline-spec.json"
+PIPELINE_SPEC = ROOT / ".claude" / "workflows" / "pipeline-spec.json"
 
 FENCED_JSON_RE = re.compile(r"```json[ \t]*\n(.*?)\n```", re.S)
 
@@ -281,15 +277,14 @@ def cap_output(out):
         return "[truncated]\n" + (head[-room:] + "\n" if room else "") + last
     return "[truncated]\n" + out[-SEQ_OUTPUT_CAP:]
 
-def run_steps(groups, env=None, script=None):
+def run_steps(groups, env=None):
     """Runs each command (an argv list) as its own process, in order, and stops at the first that fails.
-    `env`: the steps' environment (default: this process's, with CLAUDE_PROJECT_DIR). `script`: the agentic.py to run
-    (default: this file). Returns (ok, [{"cmd", "exit_code", "output"}])."""
+    `env`: the steps' environment (default: this process's, with CLAUDE_PROJECT_DIR). Returns (ok, [{"cmd", "exit_code",
+    "output"}])."""
     results, ok = [], True
     env = env if env is not None else dict(os.environ, CLAUDE_PROJECT_DIR=str(ROOT))
-    script = Path(script) if script else ENTRY
     for g in groups:
-        r = subprocess.run([sys.executable, str(script), *g], cwd=ROOT, capture_output=True, text=True,
+        r = subprocess.run([sys.executable, str(ENTRY), *g], cwd=ROOT, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", env=env)
         out = (r.stdout + r.stderr).strip()
         results.append({"cmd": " ".join(g), "exit_code": r.returncode,
@@ -401,9 +396,8 @@ def run_pipeline(manifest, args):
     gate_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
     gate_env["CLAUDE_PROJECT_DIR"] = str(ROOT)
 
-    def gate(cmds, label, agentic=LIVE_CMD):
-        script = ROOT / GUARD_DIR / "bin" / "agentic.py" if agentic == GUARD_CMD else None
-        ok, results = run_steps([shlex.split(c) for c in cmds], env=gate_env, script=script)
+    def gate(cmds, label):
+        ok, results = run_steps([shlex.split(c) for c in cmds], env=gate_env)
         return {"steps": results}
 
     def agent(prompt, agent_type, label, ident):
@@ -433,14 +427,8 @@ def architecture_type():
     m = TYPE_RE.search(ARCH.read_text(encoding="utf-8")) if ARCH.exists() else None
     return m.group(1).lower() if m else None
 
-def pipeline_plan(manifest, keep_guard=False):
-    """The plan the engines follow, as one JSON line. A maintainer run freezes the guard first (a resumed one with
-    --keep-guard keeps the copy of its first start); any other run releases a guard a crashed run may have left."""
-    maintainer = maintainer_mode(manifest)
-    if not maintainer:
-        release_guard()
-    elif not (keep_guard and (ROOT / GUARD_DIR / "active.json").exists()):
-        freeze_guard()
+def pipeline_plan(manifest):
+    """The plan the engines follow, as one JSON line."""
     waves = sorted({wp["wave"] for wp in wps(manifest).values()})
     plan = {"waves": waves, "acceptance": bool(at_entity(manifest)["command"]), "type": architecture_type(),
             "verify": sorted(manifest.get("verify", {})), "max_fix_cycles": int(load_config().get("max_fix_cycles", 2)),
@@ -448,36 +436,5 @@ def pipeline_plan(manifest, keep_guard=False):
             "baseline": bool(manifest.get("verify")),
             "docs": bool(docs_entity(manifest)), "codemap": codemap_path(manifest), "rules": rule_files(manifest),
             "wave_of": {wp["id"]: wp["wave"] for wp in wps(manifest).values()},
-            "work_packages": {str(w): sorted(wp["id"] for wp in stage_owners(manifest, str(w))) for w in waves},
-            "maintainer": maintainer, "agentic": GUARD_CMD if maintainer else LIVE_CMD}
+            "work_packages": {str(w): sorted(wp["id"] for wp in stage_owners(manifest, str(w))) for w in waves}}
     print(json.dumps(plan))
-
-
-# ---------- the frozen guard of a maintainer run ----------
-
-def freeze_guard():
-    """Copies the live flow scripts (not the tests) and the pipeline spec into GUARD_DIR and marks it active. A
-    maintainer run is then judged by this copy, whatever its agents change in .claude/bin."""
-    guard_dir = ROOT / GUARD_DIR
-    release_guard()
-    for sub in ("bin", "workflows"):
-        shutil.rmtree(guard_dir / sub, ignore_errors=True)
-    (guard_dir / "bin").mkdir(parents=True)
-    (guard_dir / "workflows").mkdir(parents=True)
-    files = {}
-    sources = [(p, f"bin/{p.name}") for p in sorted((ROOT / ".claude" / "bin").glob("*.py"))
-               if not p.name.startswith("test_") and p.name != "testutil.py"]
-    sources.append((ROOT / ".claude" / "workflows" / "pipeline-spec.json", "workflows/pipeline-spec.json"))
-    for src, rel in sources:
-        shutil.copyfile(src, guard_dir / rel)
-        files[rel] = hashlib.sha256(src.read_bytes()).hexdigest()
-    active = {"root": str(ROOT), "frozen_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "files": files}
-    (guard_dir / "active.json").write_text(json.dumps(active, indent=2) + "\n", encoding="utf-8")
-    return active
-
-def release_guard():
-    """The hook goes back to the live agentic.py. The copies stay until the next freeze replaces them."""
-    try:
-        (ROOT / GUARD_DIR / "active.json").unlink()
-    except FileNotFoundError:
-        pass

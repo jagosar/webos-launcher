@@ -125,8 +125,7 @@ def quality_check(state):
     return result["ok"], lines, summary
 
 def quality_phase():
-    """The `quality` phase of baseline and verify, run in this process (a frozen guard measures with its frozen
-    quality.py); None without a baseline."""
+    """The `quality` phase of baseline and verify, run in this process; None without a baseline."""
     state = quality_state()
     if state is None:
         return None

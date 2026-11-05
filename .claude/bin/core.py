@@ -1,8 +1,7 @@
 """The flow's shared core: paths, constants, manifest access, the ledger, locked state files and the flow-repo tests.
 
 Every other module of the flow imports from here with explicit names; nothing here imports a domain module, so the
-import graph has no cycles. The frozen copy of a maintainer run (.claude/state/guard/bin) carries its own core.py in
-the same folder as its agentic.py, so HERE, ROOT and ENTRY resolve to the frozen tree exactly as agentic.py did.
+import graph has no cycles.
 """
 import fnmatch
 import json
@@ -17,15 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compat  # noqa: E402  - the operating-system layer, next to this file
 
 HERE = Path(__file__).resolve().parent
-ENTRY = HERE / "agentic.py"  # the entry script, live or frozen: what subprocesses and run_steps execute
-# The frozen guard of a maintainer run: copies of this folder and of the pipeline spec.
-GUARD_DIR = ".claude/state/guard"
-GUARD_CMD = "python3 .claude/state/guard/bin/agentic.py"
-LIVE_CMD = "python3 .claude/bin/agentic.py"
-# A frozen copy runs from GUARD_DIR/bin, four levels below the repo instead of two.
-FROZEN = HERE.name == "bin" and HERE.parent.name == "guard" and HERE.parent.parent.name == "state"
+ENTRY = HERE / "agentic.py"  # the entry script: what subprocesses and run_steps execute
 # Where the flow is installed from: this repo, or the plugin.
-SOURCE_ROOT = HERE.parents[3] if FROZEN else HERE.parents[1]
+SOURCE_ROOT = HERE.parents[1]
 ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or SOURCE_ROOT)
 ARCH = ROOT / "architecture.md"
 STATE = ROOT / ".claude" / "state"
@@ -51,8 +44,8 @@ DOCS_DEFAULT_FILES = ["README.md", "CHANGELOG.md", "docs/"]
 DEFAULT_CODEMAP = "docs/CODEMAP.md"
 RESERVED_IDS = {"QA", "AT", "REVIEW", "DOCS"}
 ARCHIVE_DIR = "docs/architecture/"  # decision archive: written by /architect, never by a WP
-# Never owned, not even in maintainer mode: the settings that register the hooks, the flow's state (the frozen guard
-# included) and the two live hook scripts. An agent that could change them could reroute or replace the guard.
+# Never owned, not even by a plan for the flow itself: the settings that register the hooks, the flow's state, the two
+# hook scripts and the quality baseline. Whoever could change them could reroute or relax the guard.
 NEVER_OWNED = (".claude/settings.json", ".claude/settings.local.json", ".claude/state/", ".claude/bin/hook.py",
                ".claude/bin/waiting.py", ".claude/quality-baseline.json")
 QUALITY_BASELINE = ".claude/quality-baseline.json"  # the clean-code ratchet: only a person writes it
@@ -232,7 +225,7 @@ def ignored(path, patterns):
     return False
 
 
-# ---------- the flow's own repo and maintainer mode ----------
+# ---------- the flow's own repo and its by-hand plans ----------
 
 def is_flow_repo(root):
     """The flow's own repo: its plugin manifest is named agentic-flow and README.md starts with the template marker
@@ -245,20 +238,29 @@ def is_flow_repo(root):
     return isinstance(plugin, dict) and plugin.get("name") == FLOW_NAME and first.strip() == TEMPLATE_MARKER
 
 def maintainer_mode(manifest):
-    """The flag and the flow's own repo: the hook and close-stage never run validate, so a stray flag in a project
-    relaxes nothing."""
+    """A plan for the agentic-flow repository itself: the flag, in the flow's own repo. Such a plan is executed by hand;
+    a stray flag in a project relaxes nothing."""
     return manifest.get("maintainer") is True and is_flow_repo(ROOT)
 
 def never_owned_problem(path):
-    """Why `path` cannot be owned even in maintainer mode, or None."""
+    """Why `path` cannot be owned even by a plan for the flow itself, or None."""
     hit = next((n for n in NEVER_OWNED if owner_conflict(path, n)), None)
     if hit is None:
         return None
-    return f"{hit} is never owned, not even in maintainer mode (it decides which guard runs)."
+    return f"{hit} is never owned, not even by a plan for the flow itself."
 
-def flow_path_refused(path, maintainer):
-    """A path under .claude/ that no agent writes: all of them, or in maintainer mode only the never-owned ones."""
-    return path.startswith(".claude/") and (not maintainer or never_owned_problem(path) is not None)
+def flow_path_refused(path):
+    """Whether path is under .claude/, which no agent of the flow writes."""
+    return path.startswith(".claude/")
+
+BY_HAND_PLAN = ("This plan is for the agentic-flow repository itself (\"maintainer\": true): it is executed by "
+                "hand, because Claude Code does not let the agents the flow starts write under .claude/. "
+                "No agent was started.")
+
+def refuse_by_hand_plan(manifest):
+    """Stops (exit 1) before any agent or state when the plan is for the flow itself."""
+    if maintainer_mode(manifest):
+        die(BY_HAND_PLAN)
 
 
 # ---------- repo files, siblings and the agents' environment ----------

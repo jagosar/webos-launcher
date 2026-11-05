@@ -1708,7 +1708,8 @@ class LauncherTests(Base):
 
 
 class MaintainerModeTests(unittest.TestCase):
-    """Maintainer mode (2.5.0): the flow's own repo may plan work on .claude/, judged by a frozen guard."""
+    """A plan for the flow's own repository ("maintainer": true): validate accepts its .claude/ files, every command
+    that starts agents refuses it (it runs by hand, 2.10.0), and install migrates the hook and retired permissions."""
 
     OLD_HOOK = 'python3 "$CLAUDE_PROJECT_DIR/.claude/bin/agentic.py" hook'
     NEW_HOOK = 'python3 "$CLAUDE_PROJECT_DIR/.claude/bin/hook.py"'
@@ -1761,17 +1762,16 @@ class MaintainerModeTests(unittest.TestCase):
         m["work_packages"][0]["files"] = [".claude/bin/agentic.py"]
         self.assertIn("WP-01: cannot own '.claude/bin/agentic.py'.", agentic.validate(m))
 
-    def test_flow_paths_are_refused_outside_maintainer_mode_only(self):
-        self.assertTrue(agentic.flow_path_refused(".claude/bin/agentic.py", False))
-        self.assertFalse(agentic.flow_path_refused(".claude/bin/agentic.py", True))
-        self.assertTrue(agentic.flow_path_refused(".claude/settings.json", True))
-        self.assertFalse(agentic.flow_path_refused("src/a.py", False))
+    def test_flow_paths_are_always_refused_at_run_time(self):
+        self.assertTrue(agentic.flow_path_refused(".claude/bin/agentic.py"))
+        self.assertTrue(agentic.flow_path_refused(".claude/settings.json"))
+        self.assertFalse(agentic.flow_path_refused("src/a.py"))
 
-    def test_releasing_with_nothing_active_is_fine(self):
-        d = self.flow_dir()
-        with mock.patch.object(launch, "ROOT", d):
-            agentic.release_guard()
-        self.assertFalse((d / agentic.GUARD_DIR / "active.json").exists())
+    def test_a_by_hand_plan_is_refused_before_anything_runs(self):
+        with mock.patch.object(core, "is_flow_repo", return_value=True), self.assertRaises(SystemExit) as stop:
+            core.refuse_by_hand_plan({"maintainer": True})
+        self.assertEqual(stop.exception.code, 1)
+        self.assertIsNone(core.refuse_by_hand_plan({}))
 
     def test_install_migrates_the_old_hook_command(self):
         d = self.flow_dir()
@@ -1797,13 +1797,13 @@ class MaintainerModeTests(unittest.TestCase):
         self.assertEqual(data["hooks"]["PreToolUse"], src["hooks"]["PreToolUse"])
         self.assertNotIn("hook PreToolUse", " ".join(added))
 
-    def test_run_steps_runs_the_given_script(self):
-        d = self.flow_dir()
-        script = d / "fake.py"
-        script.write_text("import sys\nprint('fake', *sys.argv[1:])\n", encoding="utf-8")
-        ok, results = agentic.run_steps([["guard-release"]], script=script)
-        self.assertTrue(ok)
-        self.assertEqual(results[0]["output"], "fake guard-release")
+    def test_install_removes_only_the_retired_permission(self):
+        dst = self.flow_dir() / "settings.json"
+        retired = "Bash(python3 .claude/state/guard/bin/agentic.py:*)"
+        dst.write_text(json.dumps({"permissions": {"allow": [retired, "Bash(make:*)"]}}), encoding="utf-8")
+        data, added = agentic.merge_settings(dst, {"permissions": {"allow": [retired]}, "hooks": {"PreToolUse": []}})
+        self.assertEqual(data["permissions"]["allow"], ["Bash(make:*)"])
+        self.assertEqual([a for a in added if retired in a], [f"removed allow {retired}"])
 
 
 

@@ -70,13 +70,14 @@ def validate(manifest):
     return errors
 
 def maintainer_errors(manifest):
-    """The maintainer flag: a boolean, and true only in the flow's own repository."""
+    """The maintainer flag (a plan for the flow itself, run by hand): a boolean, and true only in the flow's repo."""
     errors = []
     flag = manifest.get("maintainer")
     if flag is not None and not isinstance(flag, bool):
         errors.append("maintainer: must be true or false.")
     elif flag and not is_flow_repo(ROOT):
-        errors.append("maintainer: maintainer mode is only for the agentic-flow repository (.claude-plugin/plugin.json "
+        errors.append("maintainer: a plan run by hand is only for the agentic-flow repository "
+                      "(.claude-plugin/plugin.json "
                       f"named {FLOW_NAME} and {TEMPLATE_MARKER} on README.md's first line).")
     return errors
 

@@ -1,6 +1,6 @@
 """Helpers for the flow's tests that must work on every system: fake executables and the fake `claude` command.
 
-Used by test_agentic.py, test_pipeline.py, test_acceptance*.py. On Windows a script with a shebang cannot be run
+Used by the flow's test files (test_*.py). On Windows a script with a shebang cannot be run
 directly, so a fake program is a `.py` file with a `.cmd` beside it; on POSIX it is an executable script.
 """
 import json

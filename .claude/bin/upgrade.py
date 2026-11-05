@@ -133,6 +133,17 @@ NOTES = {
         "The shipped CI workflow gains a `history` job that only runs in the agentic-flow repository; install "
         "refreshes the file where yours is intact.",
     ],
+    "2.10.0": [
+        "Maintainer mode is retired: the frozen guard, `pipeline-plan --keep-guard` and `guard-release` are gone, and "
+        "the hook always runs the live agentic.py. A plan with \"maintainer\": true is now only a plan for the "
+        "agentic-flow repository itself, executed by hand: every command that starts agents refuses it. An edited "
+        "agentic-implement.js that still calls guard-release must be merged with the new one (.claude/state/upgrade/).",
+        "install removes the permission for the frozen guard's command from settings.json; a leftover "
+        ".claude/state/guard/ folder can be deleted.",
+        "The per-release acceptance test files in .claude/bin are retired; their remaining checks live in the unit "
+        "suites (new: test_install, test_guardrail, test_launcher, test_ci, test_manifest_check, test_repo_scan, "
+        "test_layout). install removes intact copies from projects and keeps edited ones.",
+    ],
     "2.2.0": [
         "The reviewer reads beyond the diff: a deterministic `callers` step lists, for every public symbol defined "
         "in a changed file (the code map's regexes, ten languages), the lines of tracked code outside the diff that "

@@ -27,7 +27,7 @@ SPEC = json.loads((WORKFLOWS / "pipeline-spec.json").read_text(encoding="utf-8")
 
 def world(decl):
     """The simulated world of one scenario: the same defaults and overrides that test_workflow.mjs builds."""
-    state = {"gate_calls": 0, "gates": [], "gate_prefixes": [], "calls": [], "verifies": 0, "reviews": 0, "qas": 0, "audits": 0}
+    state = {"gate_calls": 0, "gates": [], "calls": [], "verifies": 0, "reviews": 0, "qas": 0, "audits": 0}
     base = CONFORMANCE["plan"]
 
     def text(o):
@@ -61,10 +61,8 @@ def world(decl):
             return {"exit_code": 0, "output": json.dumps({"changed": [], "symbols": {}, "callers": [], "truncated": False})}
         return {"exit_code": 0, "output": "RESULTADO: OK"}
 
-    def gate(cmds, label, agentic=pipeline.LIVE_CMD):
+    def gate(cmds, label):
         state["gate_calls"] += 1
-        if state["gate_calls"] > 1 and agentic not in state["gate_prefixes"]:
-            state["gate_prefixes"].append(agentic)
         if any(c.startswith(prefix) for prefix in decl.get("gate_lost", []) for c in cmds):
             raise RuntimeError("gatekeeper returned nothing")  # a timeout or a dead agent
         steps = []
@@ -124,7 +122,7 @@ def summarize(result, state):
     return {"result": result["result"], "failed_stage": result.get("failed_stage"), "detail": result.get("detail"),
             "fix_cycles": result["fix_cycles"],
             "pending": sorted(p.get("type") for p in result.get("pending", [])), "gates": state["gates"],
-            "gate_calls": state["gate_calls"], "gate_prefixes": state["gate_prefixes"], "agents": sorted(agents), "prompts": prompts,
+            "gate_calls": state["gate_calls"], "agents": sorted(agents), "prompts": prompts,
             "not_checked": sorted(f"{e['agent']}:{e['label']}" for e in result.get("not_checked", [])),
             "gate_denials": result.get("gate_denials", {}),
             "review_callers": (result.get("review") or {}).get("callers", 0),
@@ -153,7 +151,7 @@ class ConformanceTests(unittest.TestCase):
         for decl in CONFORMANCE["scenarios"]:
             with self.subTest(scenario=decl["name"]):
                 mine, theirs = run_scenario(decl), self.workflow[decl["name"]]
-                for key in ("result", "failed_stage", "detail", "fix_cycles", "pending", "gates", "gate_calls", "gate_prefixes", "agents", "not_checked", "gate_denials", "review_callers", "verification_failures"):
+                for key in ("result", "failed_stage", "detail", "fix_cycles", "pending", "gates", "gate_calls", "agents", "not_checked", "gate_denials", "review_callers", "verification_failures"):
                     self.assertEqual(mine[key], theirs[key], key)
                 self.assertEqual(mine["prompts"], theirs["prompts"], "the agents must receive the same prompts")
 
@@ -190,14 +188,6 @@ class EngineTests(unittest.TestCase):
         reached = run_scenario(by_name["callers reach the reviewer"])
         self.assertEqual(reached["review_callers"], 1)
         self.assertIn("src/b/x.py", reached["prompts"]["reviewer:reviewer#1"])
-        frozen = run_scenario(by_name["maintainer run uses the frozen guard"])
-        self.assertEqual((frozen["result"], frozen["gate_prefixes"], frozen["gates"][-1]),
-                         ("OK", ["python3 .claude/state/guard/bin/agentic.py"], "guard-release"))
-        briefs_fail = run_scenario(by_name["maintainer run whose briefs fail still releases the guard"])
-        self.assertEqual((briefs_fail["failed_stage"], briefs_fail["gates"][-1]), ("prepare", "guard-release"))
-        self.assertEqual(run_scenario(by_name["a resumed maintainer run keeps the guard"])["gates"][1],
-                         "pipeline-plan --keep-guard")
-        self.assertNotIn("guard-release", run_scenario(by_name["happy path"])["gates"])
         ignored = run_scenario(by_name["callers that are not JSON are ignored"])
         self.assertEqual(ignored["review_callers"], 0)
         self.assertNotIn("Callers", ignored["prompts"]["reviewer:reviewer#1"])
@@ -250,6 +240,103 @@ class EngineTests(unittest.TestCase):
         self.assertIsNone(agentic.structured_report(f, schema))
         self.assertIsNone(agentic.structured_report(tmp / "missing.json", schema))
 
+
+
+def raw_run(decl, agent_extra=None):
+    """The whole result of one scenario in the Python engine; agent_extra(agent_type, label) adds report fields."""
+    state, gate, base_agent = world(decl)
+
+    def agent(prompt, agent_type, label, ident):
+        report = base_agent(prompt, agent_type, label, ident)
+        extra = agent_extra(agent_type, label) if agent_extra else None
+        return {**report, **extra} if extra else report
+
+    return pipeline.Pipeline(SPEC, gate, agent, parallel=lambda ts: [t() for t in ts],
+                             start_wave=(decl.get("args") or {}).get("start_wave")).execute()
+
+
+def scenario(name):
+    return next(d for d in CONFORMANCE["scenarios"] if d["name"] == name)
+
+
+class SpecSchemaTests(unittest.TestCase):
+    """From test_acceptance_v2 ac_001 and test_acceptance_v21 ac_005: what the shared spec makes agents report."""
+
+    def test_judges_report_needs_validation_and_findings_have_four_parts(self):
+        schemas = SPEC["schemas"]
+        reviewer, qa = schemas["reviewer"], schemas["qa"]
+        self.assertIn("needs_validation", reviewer["required"])
+        self.assertIn("needs_validation", qa["required"])
+        self.assertTrue({"fix", "if_skipped"} <= set(reviewer["properties"]["findings"]["items"]["required"]))
+        self.assertTrue({"fix", "if_skipped"} <= set(qa["properties"]["defects"]["items"]["required"]))
+        for owner in (reviewer, qa):
+            item = owner["properties"]["needs_validation"]["items"]
+            self.assertEqual(set(item["required"]), {"wp", "file", "kind", "claim", "fact", "how_to_check"})
+            self.assertEqual(item["properties"]["kind"]["enum"], ["external", "unchanged_code"])
+
+    def test_writers_report_what_they_did_not_check(self):
+        for name in ("implementer", "test-author", "test-auditor"):
+            with self.subTest(agent=name):
+                self.assertIn("not_checked", SPEC["schemas"][name]["required"])
+        self.assertNotIn("needs_validation", SPEC["schemas"]["test-auditor"]["required"])
+
+    def test_the_implementer_has_exactly_four_statuses(self):
+        implementer = SPEC["schemas"]["implementer"]
+        self.assertEqual(implementer["properties"]["status"]["enum"],
+                         ["DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED"])
+        self.assertTrue({"concerns", "missing_context"} <= set(implementer["required"]))
+
+
+class EngineRecordTests(unittest.TestCase):
+    """The records the Python engine keeps. From test_acceptance_v2 ac_002/ac_003, test_acceptance_v21 ac_004,
+    test_acceptance_v23 ac_003 and test_acceptance_v24 ac_005."""
+
+    def test_needs_validation_becomes_pending_without_severity_and_keeps_its_line(self):
+        item = {"wp": "WP-01", "file": "src/a.py", "line": 3, "kind": "external", "claim": "c", "fact": "f",
+                "how_to_check": "h"}
+        qa_item = dict(item, wp="WP-02", line=None, kind="unchanged_code", severity="critical")
+        extra = {"reviewer": {"needs_validation": [item], "not_checked": []}, "qa": {"needs_validation": [qa_item]}}
+        result = raw_run({}, lambda agent_type, label: extra.get(agent_type))
+        self.assertEqual((result["result"], result["fix_cycles"]), ("OK", 0))
+        items = [p for p in result["pending"] if p.get("type") == "needs validation"]
+        self.assertEqual([p["source"] for p in items], ["reviewer", "qa"])
+        for entry in items:
+            self.assertNotIn("severity", entry)
+            self.assertTrue({"claim", "fact", "how_to_check", "kind", "wp", "file"} <= set(entry))
+        self.assertEqual(items[0]["line"], 3)
+
+    def test_not_checked_entries_carry_their_items(self):
+        extra = {("reviewer", "reviewer"): {"not_checked": ["load"]}, ("implementer", "WP-02"): {"not_checked": ["x"]}}
+        result = raw_run({}, lambda agent_type, label: extra.get((agent_type, label.split(" ")[0])))
+        self.assertIn({"agent": "implementer", "label": "WP-02", "items": ["x"]}, result["not_checked"])
+        self.assertIn({"agent": "reviewer", "label": "reviewer", "items": ["load"]}, result["not_checked"])
+
+    def test_statuses_map_to_close_stage_and_prompts(self):
+        concern = run_scenario(scenario("concerns go to pending and to the reviewer"))
+        self.assertTrue(any(g.startswith("close-stage 1 WP-01=done") for g in concern["gates"]), concern["gates"])
+        context = run_scenario(scenario("needs context is re-dispatched once with the whole document"))
+        self.assertIn("architecture.md, whole", context["prompts"]["implementer:WP-02 (context)#1"])
+        self.assertTrue(any("WP-02=done" in g for g in context["gates"]))
+        twice = run_scenario(scenario("needs context twice is a blocker"))
+        self.assertTrue(any("WP-02=blocker" in g for g in twice["gates"]))
+        in_fix = run_scenario(scenario("needs context in a fix wave is a blocker"))
+        self.assertTrue(any(g.startswith("close-stage 1 WP-01=blocker --fix") for g in in_fix["gates"]))
+        concerns = [p for p in raw_run(scenario("concerns go to pending and to the reviewer"))["pending"]
+                    if p.get("type") == "concern"]
+        self.assertEqual([(c.get("severity"), c["wp"]) for c in concerns], [(None, "WP-01")])
+
+    def test_a_failed_verification_is_recorded_with_its_cause(self):
+        result = raw_run(scenario("verification fails on a package: it is fixed and verified again"))
+        first = result["verification_failures"][0]
+        self.assertEqual((first["fix_cycle"], first["blocking"]), (0, ["tests"]))
+        self.assertIn("WP-02", first["suspects"])
+        self.assertEqual(first["failing"][0]["name"], "tests")
+
+    def test_a_dead_hook_stops_the_run_before_any_agent(self):
+        s = run_scenario(scenario("the guardrail hook is not running"))
+        self.assertEqual((s["result"], s["failed_stage"], s["gates"], s["agents"]),
+                         ("REVIEW", "prepare", ["hooks-check"], []))
+        self.assertIn("guardrail hook is not running", s["detail"])
 
 E2E_MANIFEST = {
     "allow_bash": ["Bash(python3 -m unittest:*)"],
@@ -361,6 +448,40 @@ class RunPipelineEndToEndTests(unittest.TestCase):
         self.assertEqual(self.repo.run("run-pipeline", "--wave", "2").returncode, 1)
         self.assertEqual(self.repo.run("run-pipeline", "--start-wave", "x").returncode, 1)
 
+
+    def run_with(self, **env):
+        self.repo.env.update(env)
+        r = self.repo.run("run-pipeline")
+        self.assertIn("RESULT: OK", r.stdout, r.stdout + r.stderr)
+        return self.saved()
+
+    def test_reports_not_checked_and_needs_validation_reach_the_record(self):
+        """From test_acceptance_v2 ac_003."""
+        saved = self.run_with(FAKE_NOT_CHECKED="1", FAKE_NEEDS_VALIDATION="WP-01")
+        self.assertGreaterEqual(len(saved["not_checked"]), 5)
+        self.assertEqual(len([p for p in saved["pending"] if p.get("type") == "needs validation"]), 1)
+
+    def test_concerns_reach_the_record_and_nothing_is_denied(self):
+        """From test_acceptance_v21 ac_005."""
+        saved = self.run_with(FAKE_CONCERNS="1")
+        concerns = [p for p in saved["pending"] if p.get("type") == "concern"]
+        self.assertEqual(sorted(c["wp"] for c in concerns), ["WP-01", "WP-02", "WP-03"])
+        self.assertEqual(saved["gate_denials"], {})
+
+    def test_launched_from_a_session_whose_hook_is_dead_it_still_runs(self):
+        """From test_acceptance_v24 ac_009: the gates check the hook statically, not by heartbeat."""
+        live = self.repo.run("hooks-check", env={"CLAUDECODE": "1"})
+        self.assertEqual(live.returncode, 3, "no heartbeat: a live check fails")
+        self.assertEqual(self.run_with(CLAUDECODE="1")["result"], "OK")
+
+    def test_the_record_carries_usage_and_implementers_read_their_brief(self):
+        """From test_acceptance ac_010."""
+        saved = self.run_with(FAKE_MODE="structured")
+        agents = [c for c in self.calls()]
+        self.assertEqual(len(saved["usage"]["by_agent"]), len(agents))
+        self.assertEqual(saved["usage"]["total"]["output"], 50 * len(agents))
+        for call in (c for c in agents if c["agent"] == "implementer"):
+            self.assertIn(f".claude/state/briefs/{call['id']}.md", call["prompt"])
 
 if __name__ == "__main__":
     unittest.main()

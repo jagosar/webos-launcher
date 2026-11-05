@@ -53,7 +53,6 @@ Subcommands:
   stop [ID...]        Stops the running agents (all of them if none is given) and records it in the ledger.
   hook                PreToolUse hook (reads JSON from stdin).
   hooks-check         JSON: whether the guardrail hook runs in this session (exit 3 if it does not).
-  guard-release       Maintainer mode: the hook goes back to the live agentic.py (the engines call it at the end).
   quality [--init|--update]
                       The clean-code ratchet: function length, nesting, file size and long lines against
                       .claude/quality-baseline.json (exit 3 if something got worse). --init creates it, --update lowers it.
@@ -71,13 +70,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compat  # noqa: E402  - the operating-system layer, next to this file
-# The modules by domain. Some names are imported only to be re-exported: tests and the frozen acceptance files read
-# them as agentic.<name>, and test_definitions.StructureTests checks they are the modules' own objects.
+# The modules by domain. Some names are imported only to be re-exported: tests and the acceptance files read them as
+# agentic.<name>, and test_definitions.StructureTests checks they are the modules' own objects.
 from core import (  # noqa: E402
-    ARCH, ARCHIVE_DIR, GUARD_DIR, LEDGER_MD, LEDGER_STATES, QUALITY_BASELINE, ROOT, SKIP_DIRS, STATE, USAGE,
+    ARCH, ARCHIVE_DIR, LEDGER_MD, LEDGER_STATES, QUALITY_BASELINE, ROOT, SKIP_DIRS, STATE, USAGE,
     ManifestError, die, entities, flow_path_refused, is_flow_repo, ledger_read, ledger_render, ledger_update,
-    load_manifest, locked_json, maintainer_mode, never_owned_problem, now_hm, root_drift, sibling, stage_of,
-    status_to_state, stop, usage_records, with_claims,
+    load_manifest, locked_json, maintainer_mode, never_owned_problem, now_hm, refuse_by_hand_plan, root_drift, sibling,
+    stage_of, status_to_state, stop, usage_records, with_claims,
 )
 from manifest_check import frontmatter_model, known_packs, require_valid, validate  # noqa: E402
 from repo_scan import PATH_RE, callers, codemap, declared_stack, detect_stack, docs_check, rules_sync  # noqa: E402
@@ -87,16 +86,16 @@ from installer import (  # noqa: E402
     RESULT_FILE, flow_history, flow_history_check, flow_version, install, merge_settings, sync_permissions,
 )
 from launch import (  # noqa: E402
-    load_spec, pipeline_plan, release_guard, render_prompt, run_acceptance, run_docs, run_pipeline, run_qa,
+    load_spec, pipeline_plan, render_prompt, run_acceptance, run_docs, run_pipeline, run_qa,
     run_review, run_steps, run_wave, seq, structured_report, write_briefs,
 )
 from guardrail import hook, hooks_check  # noqa: E402
 
 __all__ = [
-    "ROOT", "GUARD_DIR", "QUALITY_BASELINE", "SKIP_DIRS", "USAGE", "is_flow_repo", "maintainer_mode",
+    "ROOT", "QUALITY_BASELINE", "SKIP_DIRS", "USAGE", "is_flow_repo", "maintainer_mode",
     "never_owned_problem", "flow_path_refused", "locked_json", "usage_records", "status_to_state", "validate",
     "frontmatter_model", "require_valid", "PATH_RE", "attribute", "run_command", "quality_files", "merge_settings",
-    "structured_report", "run_steps", "render_prompt", "release_guard", "load_spec", "compat", "COMMANDS", "main",
+    "structured_report", "run_steps", "render_prompt", "load_spec", "compat", "COMMANDS", "main",
 ]
 
 
@@ -116,6 +115,13 @@ def cmd_claim(args):
     registered = os.environ.get("AGENTIC_WP") or args[0] in with_claims(lambda c: None).values()
     print(f"{args[0]} reclamado." if registered
           else f"Warning: the hook did not record {args[0]}. Are the hooks in .claude/settings.json active?")
+
+
+def require_runnable():
+    """The valid manifest of a plan agents may run: a plan for the flow itself stops here, before any state."""
+    manifest = require_valid()
+    refuse_by_hand_plan(manifest)
+    return manifest
 
 
 def cmd_status(args):
@@ -147,22 +153,17 @@ def cmd_validate(args):
 
 
 def cmd_run_qa(args):
-    run_qa(require_valid())
+    run_qa(require_runnable())
 
 
 def cmd_pipeline_plan(args):
-    if args not in ([], ["--keep-guard"]):
-        die("Uso: pipeline-plan [--keep-guard]")
-    pipeline_plan(require_valid(), keep_guard=bool(args))
+    if args:
+        die("Uso: pipeline-plan")
+    pipeline_plan(require_runnable())
 
 
 def cmd_quality(args):
     return quality(args)
-
-
-def cmd_guard_release(args):
-    release_guard()
-    print("Guard released.")
 
 
 def cmd_open_stage(args):
@@ -187,7 +188,7 @@ def cmd_seq(args):
 
 
 def cmd_run_pipeline(args):
-    run_pipeline(require_valid(), args)
+    run_pipeline(require_runnable(), args)
 
 
 def cmd_verify(args):
@@ -221,7 +222,7 @@ def cmd_sync_permissions(args):
 
 
 def cmd_run_docs(args):
-    run_docs(require_valid())
+    run_docs(require_runnable())
 
 
 def cmd_stack(args):
@@ -290,11 +291,11 @@ def cmd_release_notes(args):
 
 
 def cmd_run_acceptance(args):
-    run_acceptance(require_valid())
+    run_acceptance(require_runnable())
 
 
 def cmd_run_review(args):
-    run_review(require_valid())
+    run_review(require_runnable())
 
 
 def cmd_acceptance(args):
@@ -322,14 +323,14 @@ def cmd_run_wave(args):
     label, rest = stage_arg("run-wave", args), args[1:]
     if "--all" in rest and "--fix" not in rest:
         die("Uso: run-wave N [WP...] [--fix [--all]]")
-    run_wave(require_valid(), int(label), only=[a for a in rest if a not in ("--fix", "--all")],
+    run_wave(require_runnable(), int(label), only=[a for a in rest if a not in ("--fix", "--all")],
              fix="--fix" in rest, include_all="--all" in rest)
 
 
 COMMANDS = {
     "hook": cmd_hook, "hooks-check": cmd_hooks_check, "claim": cmd_claim, "status": cmd_status, "mark": cmd_mark,
     "stop": cmd_stop, "validate": cmd_validate, "run-qa": cmd_run_qa, "pipeline-plan": cmd_pipeline_plan,
-    "quality": cmd_quality, "guard-release": cmd_guard_release, "open-stage": cmd_open_stage,
+    "quality": cmd_quality, "open-stage": cmd_open_stage,
     "close-stage": cmd_close_stage, "briefs": cmd_briefs, "seq": cmd_seq, "run-pipeline": cmd_run_pipeline,
     "verify": cmd_verify, "baseline": cmd_baseline, "save-result": cmd_save_result,
     "sync-permissions": cmd_sync_permissions, "run-docs": cmd_run_docs, "stack": cmd_stack,

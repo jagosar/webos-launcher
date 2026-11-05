@@ -59,17 +59,25 @@ def flow_version():
     except (OSError, json.JSONDecodeError):
         return "dev"
 
+# Rules an older flow added and none needs any more: install removes exactly these from the project's settings.
+RETIRED_PERMISSIONS = ("Bash(python3 .claude/state/guard/bin/agentic.py:*)",)  # the frozen guard, gone in 2.10.0
+
+
 def merge_settings(dst, src):
-    """Adds to the project's settings.json the flow's permissions, hook and workflows, removing nothing of theirs."""
+    """Adds to the project's settings.json the flow's permissions, hook and workflows, removing nothing of theirs but
+    the RETIRED_PERMISSIONS the flow itself once added."""
     data = json.loads(dst.read_text(encoding="utf-8")) if dst.exists() else {}
     added = []
     perms = data.setdefault("permissions", {})
     for key in ("allow", "deny"):
         current = perms.setdefault(key, [])
         for rule in src.get("permissions", {}).get(key, []):
-            if rule not in current:
+            if rule not in current and rule not in RETIRED_PERMISSIONS:
                 current.append(rule)
                 added.append(f"{key} {rule}")
+    for rule in [r for r in perms.get("allow", []) if r in RETIRED_PERMISSIONS]:
+        perms["allow"].remove(rule)
+        added.append(f"removed allow {rule}")
     hooks = data.setdefault("hooks", {})
     pre = hooks.setdefault("PreToolUse", [])
     ours = flow_hooks(pre)
@@ -81,8 +89,8 @@ def merge_settings(dst, src):
         # matcher is extended, never replaced (it may have been trimmed on purpose).
         source_hook = src["hooks"]["PreToolUse"][0]["hooks"][0]
         for entry, hook_ in ours:
-            # 2.5: the hook runs through the launcher, which picks the frozen guard of a maintainer run. Only the
-            # command changes; the project's matcher and timeout stay.
+            # 2.5: the hook runs through the launcher hook.py. Only the command changes; the project's matcher and
+            # timeout stay.
             if is_old_hook_command(hook_.get("command", "")) and not is_old_hook_command(source_hook["command"]):
                 hook_["command"] = source_hook["command"]
                 added.append("hook PreToolUse (hook.py)")

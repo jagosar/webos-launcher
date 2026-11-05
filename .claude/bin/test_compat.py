@@ -16,7 +16,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+BIN = Path(__file__).resolve().parent
+sys.path.insert(0, str(BIN))
 import compat  # noqa: E402
 import testutil  # noqa: E402
 
@@ -156,6 +157,42 @@ class TestutilTests(TempDir):
         self.assertNotIn("\\", value)
         self.assertTrue(value.endswith("fake.py") or value.endswith("fake.py'"))
 
+
+
+class PortabilityTests(unittest.TestCase):
+    """From test_acceptance_portable ac_001 and ac_003."""
+
+    def test_the_flow_imports_and_locks_without_fcntl_and_only_compat_names_it(self):
+        tmp = Path(tempfile.mkdtemp(prefix="nofcntl-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        data = tmp / "data.json"
+        code = ("import sys; from pathlib import Path; sys.modules['fcntl'] = None; "
+                f"sys.path.insert(0, {str(BIN)!r}); import agentic; del sys.modules['fcntl']; "
+                f"agentic.locked_json(Path({str(data)!r}), lambda d: {{'a': 1}})")
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", env=dict(os.environ, CLAUDE_PROJECT_DIR=str(tmp)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(data.read_text(encoding="utf-8")), {"a": 1})
+        for path in BIN.glob("*.py"):
+            if path.name == "compat.py" or path.name.startswith("test"):
+                continue
+            with self.subTest(module=path.name):
+                text = path.read_text(encoding="utf-8")
+                self.assertNotRegex(text, r"^\s*(import|from)\s+(fcntl|msvcrt)\b")
+
+    def test_commands_survive_an_ascii_console(self):
+        from test_agentic import Repo
+        repo = Repo()
+        self.addCleanup(repo.cleanup)
+        plan = (repo.dir / "architecture.md").read_text(encoding="utf-8").replace("# A", "# Plan · € ñ", 1)
+        repo.write("architecture.md", plan)
+        ascii_env = {"PYTHONIOENCODING": "ascii"}
+        self.assertEqual(repo.run("validate", env=ascii_env).returncode, 0)
+        self.assertEqual(repo.run("mark", "WP-01", "done", "nota · ñ").returncode, 0)
+        r = repo.run("status", env=ascii_env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("nota", r.stdout)
+        self.assertNotIn("UnicodeEncodeError", r.stderr)
 
 if __name__ == "__main__":
     unittest.main()

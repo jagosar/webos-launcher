@@ -253,5 +253,11 @@ class GapTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, f"no upgrade notes for {version}"):
                         upgrade.release_notes(version)
 
+
+class ShippedGlobTests(unittest.TestCase):
+    def test_the_release_workflow_is_not_shipped_to_projects(self):
+        """From test_acceptance_v29 ac_010: only the flow's repository publishes releases."""
+        self.assertFalse([g for g in upgrade.EXTRA_GLOBS if "release" in g])
+
 if __name__ == "__main__":
     unittest.main()

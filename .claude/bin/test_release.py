@@ -103,6 +103,35 @@ class CheckCommandTests(unittest.TestCase):
         self.check(repo)
         self.assertFalse((repo.dir / ".claude/flow-history.json").exists())
 
+    def test_a_published_tag_the_history_lacks_is_missing(self):
+        """From test_acceptance_v29 ac_002."""
+        repo = self.copy()
+        repo.run("flow-history")
+        repo.commit()
+        repo.write(agent="B")
+        repo.commit()
+        repo.git("tag", "agentic-flow--v1.0.0")
+        before = (repo.dir / ".claude/flow-history.json").read_bytes()
+        code, data = self.check(repo)
+        self.assertEqual((code, data["missing"]), (3, [{"ref": "agentic-flow--v1.0.0", "path": AGENT}]))
+        self.assertEqual((repo.dir / ".claude/flow-history.json").read_bytes(), before)
+
+    def test_a_shallow_clone_is_refused_not_judged(self):
+        """From test_acceptance_v29 ac_005: a plain local path would ignore --depth, so the clone uses file://."""
+        repo = self.copy()
+        repo.publish("agentic-flow--v1.0.0")
+        repo.write(agent="B")
+        repo.commit()
+        clone = Path(tempfile.mkdtemp(prefix="release-shallow-")) / "c"
+        self.addCleanup(shutil.rmtree, clone.parent, ignore_errors=True)
+        subprocess.run(["git", "clone", "-q", "--depth", "1", repo.dir.as_uri(), str(clone)], check=True)
+        env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PROJECT_DIR", "CLAUDECODE")}
+        r = subprocess.run([sys.executable, str(clone / ".claude/bin/agentic.py"), "flow-history", "--check"],
+                           cwd=clone, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("flow-history: needs the full git history", r.stderr)
+        self.assertNotIn('"ok"', r.stdout)
+
     def test_other_arguments_are_refused_without_writing(self):
         repo = self.copy()
         for args in (["--chek"], ["--check", "x"], ["extra"]):
