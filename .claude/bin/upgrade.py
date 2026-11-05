@@ -116,6 +116,12 @@ NOTES = {
         "edited agentic.py of yours, it is the old self-contained file and keeps working alone; the new modules sit "
         "beside it unused until you take the new agentic.py from .claude/state/upgrade/.",
     ],
+    "2.8.1": [
+        "A command run from inside one repository while CLAUDE_PROJECT_DIR still names another (a cloud session's "
+        "variable follows its working directory, which moves between tool calls) is refused, with both paths in the "
+        "message, instead of validating, measuring or rewriting the other repository. install and flow-history, which "
+        "act on their target and the source, are exempt.",
+    ],
     "2.2.0": [
         "The reviewer reads beyond the diff: a deterministic `callers` step lists, for every public symbol defined "
         "in a changed file (the code map's regexes, ten languages), the lines of tracked code outside the diff that "
