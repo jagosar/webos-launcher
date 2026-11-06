@@ -16,7 +16,7 @@ from core import (  # noqa: E402
     ARCHIVE_DIR, BASELINE, CLAIMS, GATE, GATE_MAX_DENIALS, GATE_MAX_LINES, GATE_STATUSES, GATE_TIMEOUT_S,
     HOOK_SEEN, LEDGER_STATES, ManifestError, PROTECTED_CONFIG_RE, ROOT, SECRET_RES, SKIP_MARKER_RE, STATE,
     TEST_PATH_RE, WP_ID_RE, at_entity, codemap_path, die, docs_entity, entities, flow_path_refused, ignored,
-    ledger_read, ledger_stage, ledger_update, load_manifest, locked_json, maintainer_mode, owns, qa_entity,
+    ledger_read, ledger_stage, ledger_update, load_manifest, locked_json, owns, qa_entity,
     review_entity, sibling, stage_of, wps
 )
 from verification import acceptance_check, attribute, normal_failure, run_command  # noqa: E402
@@ -151,11 +151,10 @@ def check_stage(manifest, label):
     report = {o["id"]: [] for o in owners}
     violations, owned = [], []
     nobodys = ("architecture.md", codemap_path(manifest))
-    maintainer = maintainer_mode(manifest)
     for path in changed:
         owner = next((o for o in owners if any(owns(f, path) for f in o["files"])), None)
         # Nobody writes the plan, the flow, the decision archive or the code map, even inside a zone that covers them.
-        if owner and (path in nobodys or path.startswith(ARCHIVE_DIR) or flow_path_refused(path, maintainer)):
+        if owner and (path in nobodys or path.startswith(ARCHIVE_DIR) or flow_path_refused(path)):
             owner = None
         if owner:
             report[owner["id"]].append(path)

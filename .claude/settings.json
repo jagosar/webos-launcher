@@ -2,8 +2,7 @@
   "permissions": {
     "allow": [
       "Bash(python3 .claude/bin/agentic.py:*)",
-      "Workflow(agentic-implement)",
-      "Bash(python3 .claude/state/guard/bin/agentic.py:*)"
+      "Workflow(agentic-implement)"
     ],
     "deny": [
       "Bash(git reset --hard:*)",

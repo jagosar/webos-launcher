@@ -14,7 +14,7 @@ from core import (  # noqa: E402
     ARCHIVE_DIR, GATE_MAX_DENIALS, HOOK_SEEN, HOOK_SEEN_COMMAND_CHARS, HOOK_SEEN_MAX_AGE_S, ManifestError,
     PROTECTED_CONFIG_RE, READ_ONLY_AGENTS, ROOT, SECRET_RES, SKIP_MARKER_RE, TEST_PATH_RE, WP_ID_RE, at_entity,
     codemap_path, entities, flow_hooks, flow_path_refused, ledger_update, load_manifest, locked_json,
-    maintainer_mode, now_hm, owns, stage_of, with_claims, wps
+    now_hm, owns, stage_of, with_claims, wps
 )
 from stage import gate_check, gate_denials  # noqa: E402
 
@@ -257,7 +257,7 @@ def write_rules(data, owner_id, tool, tinput):
     # No agent of the flow writes the plan, the flow's configuration, the decision archive or the generated
     # code map, even if its zone includes them by prefix (for example, "docs/").
     if (rel == "architecture.md" or rel.startswith(ARCHIVE_DIR) or rel == codemap_path(manifest)
-            or flow_path_refused(rel, maintainer_mode(manifest))):
+            or flow_path_refused(rel)):
         block(f"{owner_id}: {rel} is not written by any agent of the flow (plan, configuration, decision archive "
               "or generated map). If it has to change, return the blocked status your schema allows (BLOCKED for an "
               "implementer, BLOCKER for the others).")
