@@ -5,6 +5,8 @@ class names its origin.
 Run: python3 -m unittest discover -s .claude/bin -p "test_guardrail.py"
 """
 import json
+import shutil
+import subprocess
 import sys
 import time
 import unittest
@@ -222,6 +224,76 @@ class GateMessageTests(RepoCase):
         self.assertEqual(self.repo.run("open-stage", "qa").returncode, 0)
         self.assertNotIn("GATE:", self.repo.run("close-stage", "qa", "QA=pass").stdout)
 
+
+
+class ShortcutHookTests(RepoCase):
+    """Design 0018 (issue 57): the hook blocks the shortcuts a write adds to code."""
+
+    def write(self, rel, content, tool="Write", old=None):
+        tinput = {"file_path": str(self.repo.dir / rel)}
+        tinput.update({"old_string": old, "new_string": content} if tool == "Edit" else {"content": content})
+        return self.repo.run("hook", stdin=json.dumps({"tool_name": tool, "tool_input": tinput}),
+                             env={"AGENTIC_WP": "WP-01"})
+
+    def test_a_swallowed_exception_is_blocked_with_the_way_out(self):
+        r = self.write("src/a.py", "try:\n    x()\nexcept Exception:\n    pa" "ss\n")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("WP-01: an exception swallowed with pass in src/a.py", r.stderr)
+        self.assertIn("BLOCKED", r.stderr)
+
+    def test_an_edit_that_keeps_an_old_shortcut_passes_and_one_that_adds_it_does_not(self):
+        self.repo.write("src/a.py", "x = 1\n# [DEB" "UG-1]\n")
+        self.assertEqual(self.write("src/a.py", "x = 2", tool="Edit", old="x = 1").returncode, 0)
+        r = self.write("src/a.py", "x = 1  # [DEB" "UG-2]", tool="Edit", old="x = 1")
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_documentation_may_name_the_shortcuts(self):
+        manifest = dict(MANIFEST, work_packages=[dict(MANIFEST["work_packages"][0], files=["docs/a.md", "src/a.py"])])
+        repo = Repo(manifest)
+        self.addCleanup(repo.cleanup)
+        payload = {"tool_name": "Write", "tool_input": {"file_path": str(repo.dir / "docs/a.md"),
+                                                        "content": "Never leave [DEB" "UG- logs.\n"}}
+        self.assertEqual(repo.run("hook", stdin=json.dumps(payload), env={"AGENTIC_WP": "WP-01"}).returncode, 0)
+
+
+class WorkflowSubagentTests(RepoCase):
+    """Design 0018 (issue 68): an unclaimed workflow-subagent may run Bash but not write files."""
+
+    AGENT = {"agent_id": "w1", "agent_type": "workflow-subagent"}
+
+    def call(self, payload):
+        return self.repo.run("hook", stdin=json.dumps({**payload, **self.AGENT}))
+
+    def test_without_a_claim_it_cannot_write_but_can_run_commands(self):
+        for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+            with self.subTest(tool=tool):
+                r = self.call(write_payload(str(self.repo.dir / "src/a.py"), tool=tool))
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertIn("claim", r.stderr)
+        self.assertEqual(self.call(bash_payload("ls")).returncode, 0)
+
+    def test_once_claimed_it_writes_only_its_zone(self):
+        self.assertEqual(self.call(bash_payload("python3 .claude/bin/agentic.py claim WP-01")).returncode, 0)
+        self.assertEqual(self.call(write_payload(str(self.repo.dir / "src/a.py"))).returncode, 0)
+        self.assertEqual(self.call(write_payload(str(self.repo.dir / "src/b/x.py"))).returncode, 2)
+
+
+class HookLauncherTests(RepoCase):
+    """From test_acceptance_v210 ac_005: hook.py runs the live guard, whatever a 2.9 run left behind."""
+
+    def test_a_leftover_frozen_copy_is_never_run(self):
+        bin_dir = self.repo.dir / ".claude/bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        for f in Path(__file__).resolve().parent.glob("*.py"):
+            if not f.name.startswith("test_"):
+                shutil.copy(f, bin_dir / f.name)
+        self.repo.write(".claude/state/guard/active.json", "{}")
+        self.repo.write(".claude/state/guard/bin/agentic.py", "print('FROZEN')\n")
+        r = subprocess.run([sys.executable, str(bin_dir / "hook.py")], cwd=self.repo.dir, capture_output=True,
+                           text=True, input=json.dumps(write_payload("src/c.py")),
+                           env=dict(self.repo.env, AGENTIC_WP="WP-01"), encoding="utf-8", errors="replace")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertNotIn("FROZEN", r.stdout + r.stderr)
 
 if __name__ == "__main__":
     unittest.main()

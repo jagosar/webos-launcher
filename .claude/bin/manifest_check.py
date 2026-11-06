@@ -69,6 +69,33 @@ def validate(manifest):
     errors += agent_model_errors(manifest)
     return errors
 
+# Advice from validate, never errors (issue 60): just above the largest values of the 17 archived plans (14 files,
+# 8 criteria, 7 packages in a wave). Not calibrated against bench runs.
+WP_FILES_WARN = 15
+WP_ACS_WARN = 8
+WAVE_WPS_WARN = 8
+
+def complexity_warnings(manifest):
+    """What makes a plan hard to run in parallel or to review: oversized packages, crowded waves, a chain."""
+    warnings, waves = [], {}
+    packages = [wp for wp in manifest.get("work_packages", []) if isinstance(wp, dict) and "id" in wp]
+    for wp in packages:
+        files, acs = wp.get("files", []), wp.get("acs", [])
+        if isinstance(files, list) and len(files) > WP_FILES_WARN:
+            warnings.append(f"{wp['id']}: owns {len(files)} files (more than {WP_FILES_WARN}): consider splitting it")
+        if isinstance(acs, list) and len(acs) > WP_ACS_WARN:
+            warnings.append(f"{wp['id']}: answers for {len(acs)} criteria (more than {WP_ACS_WARN}): "
+                            "consider splitting it")
+        if isinstance(wp.get("wave"), int):
+            waves.setdefault(wp["wave"], []).append(wp["id"])
+    for wave in sorted(waves):
+        if len(waves[wave]) > WAVE_WPS_WARN:
+            warnings.append(f"wave {wave}: {len(waves[wave])} packages (more than {WAVE_WPS_WARN}): "
+                            "consider another wave")
+    if len(waves) >= 2 and all(len(ids) == 1 for ids in waves.values()):
+        warnings.append("every wave holds one package: the plan is a chain, nothing runs in parallel")
+    return warnings
+
 def maintainer_errors(manifest):
     """The maintainer flag (a plan for the flow itself, run by hand): a boolean, and true only in the flow's repo."""
     errors = []

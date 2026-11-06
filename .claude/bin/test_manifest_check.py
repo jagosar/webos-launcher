@@ -45,5 +45,47 @@ class ByHandPlanTests(unittest.TestCase):
             self.assertTrue([e for e in agentic.validate(plan) if "quality-baseline" in e and "never owned" in e])
 
 
+
+def packages(*waves, files=1, acs=None):
+    return [{"id": f"WP-{i:02d}", "wave": w, "depends_on": [], "files": [f"src/f{i}_{n}.py" for n in range(files)],
+             **({"acs": acs} if acs is not None else {})} for i, w in enumerate(waves, 1)]
+
+
+class ComplexityWarningTests(unittest.TestCase):
+    """Design 0018 (issue 60): validate's advice, never errors."""
+
+    def test_a_plain_plan_has_no_warnings(self):
+        self.assertEqual(manifest_check.complexity_warnings(MANIFEST), [])
+
+    def test_oversized_packages(self):
+        plan = {"work_packages": packages(1, 1, files=16, acs=[f"AC-{i:03d}" for i in range(9)])}
+        found = manifest_check.complexity_warnings(plan)
+        self.assertIn("WP-01: owns 16 files (more than 15): consider splitting it", found)
+        self.assertIn("WP-02: answers for 9 criteria (more than 8): consider splitting it", found)
+        at_limit = {"work_packages": packages(1, 1, files=15, acs=["AC-001"] * 8)}
+        self.assertEqual(manifest_check.complexity_warnings(at_limit), [], "the limits themselves are fine")
+
+    def test_a_crowded_wave_and_a_chain(self):
+        self.assertEqual(manifest_check.complexity_warnings({"work_packages": packages(*[1] * 9)}),
+                         ["wave 1: 9 packages (more than 8): consider another wave"])
+        self.assertEqual(manifest_check.complexity_warnings({"work_packages": packages(1, 2, 3)}),
+                         ["every wave holds one package: the plan is a chain, nothing runs in parallel"])
+        self.assertEqual(manifest_check.complexity_warnings({"work_packages": packages(1)}), [], "one wave is no chain")
+        self.assertEqual(manifest_check.complexity_warnings({"work_packages": packages(1, 1, 2)}), [])
+
+    def test_odd_values_skip_only_their_rule(self):
+        plan = {"work_packages": [{"id": "WP-01", "wave": "x", "files": "src/", "acs": None}, "junk"]}
+        self.assertEqual(manifest_check.complexity_warnings(plan), [])
+
+    def test_validate_prints_them_and_other_commands_do_not(self):
+        from test_agentic import Repo
+        repo = Repo(dict(MANIFEST, work_packages=packages(1, 2, 3)))
+        self.addCleanup(repo.cleanup)
+        r = repo.run("validate")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.splitlines()[0], "Manifest valid.")
+        self.assertIn("warning: every wave holds one package", r.stdout)
+        self.assertNotIn("warning:", repo.run("pipeline-plan").stdout)
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@
 Every other module of the flow imports from here with explicit names; nothing here imports a domain module, so the
 import graph has no cycles.
 """
+import ast
 import fnmatch
 import json
 import os
@@ -112,7 +113,57 @@ SECRET_RES = [
     (re.compile(r"AIza[0-9A-Za-z_\-]{35}"), "a Google key"),
     (re.compile(r"-----BEGIN (RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY"), "a private key"),
 ]
+# The usual agent shortcuts (issue 57): blocked when a change adds them to code. (regex, what, tests only)
+SHORTCUT_RES = [
+    (re.compile(r"\bexcept(\s+(Exception|BaseException)(\s+as\s+\w+)?)?\s*:[ \t]*(#[^\n]*)?\n?[ \t]*pass\b"),
+     "an exception swallowed with pass", False),
+    (re.compile(r"\bcatch\s*(\([^)]*\))?\s*\{\s*\}"), "an empty catch block", False),
+    (re.compile(r"\bassert\s+True\b|\bassertTrue\(\s*True\s*\)|"
+                r"expect\(\s*true\s*\)\.(toBe|toEqual)\(\s*true\s*\)"), "an assertion that is always true", True),
+    (re.compile(r"\[DEBUG-"), "a [DEBUG-] log left behind", False),
+]
+# A call whose name starts with one of these counts as an assertion (self.assertIn, pytest.raises, check_total...).
+ASSERT_CALL_PREFIXES = ("assert", "check", "expect", "verify", "fail", "raises")
+# The shortcuts are looked for in code only: documentation that names them (a design, the guide) is not blamed.
+CODE_SUFFIXES = (".py", ".pyi", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".java", ".kt", ".go", ".rb", ".php",
+                 ".cs", ".swift", ".rs")
 
+
+
+def _asserts(fn):
+    """Whether a test function asserts: an assert statement, or a call named like an assertion."""
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assert):
+            return True
+        if isinstance(node, ast.Call):
+            name = getattr(node.func, "attr", None) or getattr(node.func, "id", None) or ""
+            if name.startswith(ASSERT_CALL_PREFIXES):
+                return True
+    return False
+
+
+def assertless_tests(text):
+    """How many test_* functions, at module level or directly in a class, assert nothing. 0 when it does not parse."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return 0
+    bodies = [tree.body] + [n.body for n in tree.body if isinstance(n, ast.ClassDef)]
+    tests = [fn for body in bodies for fn in body
+             if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name.startswith("test_")]
+    return sum(1 for fn in tests if not _asserts(fn))
+
+
+def shortcut_problems(path, old, new):
+    """What a change to a code file adds of SHORTCUT_RES, plus a Python test without an assertion; [] otherwise."""
+    if not path.endswith(CODE_SUFFIXES):
+        return []
+    is_test = bool(TEST_PATH_RE.search(path))
+    found = [what for rx, what, tests_only in SHORTCUT_RES
+             if (is_test or not tests_only) and len(rx.findall(new)) > len(rx.findall(old or ""))]
+    if is_test and path.endswith(".py") and assertless_tests(new) > assertless_tests(old or ""):
+        found.append("a test without an assertion")
+    return found
 
 def root_drift():
     """Why this call would act on the wrong repository, or None. CLAUDE_PROJECT_DIR follows a session's working
