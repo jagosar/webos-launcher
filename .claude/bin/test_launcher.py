@@ -167,5 +167,36 @@ class FixSourceTests(LauncherCase):
         self.assertIn("run-pipeline, run-review or run-qa", r.stderr)
 
 
+
+class ByHandPlanTests(unittest.TestCase):
+    """From test_acceptance_v210 ac_002 and ac_003: a plan for the flow itself ("maintainer": true) is executed by
+    hand; every command that starts agents refuses it before writing anything."""
+
+    def flow_repo(self):
+        manifest = {"maintainer": True, "acceptance": {"files": ["acceptance/"], "command": "python3 acc.py"},
+                    "work_packages": [{"id": "WP-01", "wave": 1, "depends_on": [],
+                                       "files": [".claude/bin/x.py", "src/a.py"]}]}
+        repo = Repo(manifest)
+        self.addCleanup(repo.cleanup)
+        repo.write(".claude-plugin/plugin.json", json.dumps({"name": "agentic-flow"}))
+        repo.write("README.md", "<!-- agentic-flow-template -->\n# flow\n")
+        return repo
+
+    def test_every_agent_command_refuses_before_writing(self):
+        repo = self.flow_repo()
+        fake = repo.dir / "fake_claude.py"
+        fake.write_text(f"open({str(repo.dir / 'MARKER')!r}, 'w').close()\nprint('{{}}')\n", encoding="utf-8")
+        env = {"AGENTIC_CLAUDE": f"{sys.executable} {fake}"}
+        for args in (["pipeline-plan"], ["run-wave", "1"], ["run-review"], ["run-acceptance"], ["run-pipeline"]):
+            with self.subTest(args=args):
+                r = repo.run(*args, env=env)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn("executed by hand", r.stderr)
+        state = repo.dir / ".claude/state"
+        self.assertFalse((repo.dir / "MARKER").exists(), "no agent was started")
+        for leftover in ("briefs", "runs", "guard"):
+            self.assertFalse((state / leftover).exists(), leftover)
+        self.assertFalse(list(state.glob("snapshot-*.json")) if state.exists() else [])
+
 if __name__ == "__main__":
     unittest.main()

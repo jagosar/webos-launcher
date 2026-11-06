@@ -14,7 +14,7 @@ from core import (  # noqa: E402
     ARCHIVE_DIR, GATE_MAX_DENIALS, HOOK_SEEN, HOOK_SEEN_COMMAND_CHARS, HOOK_SEEN_MAX_AGE_S, ManifestError,
     PROTECTED_CONFIG_RE, READ_ONLY_AGENTS, ROOT, SECRET_RES, SKIP_MARKER_RE, TEST_PATH_RE, WP_ID_RE, at_entity,
     codemap_path, entities, flow_hooks, flow_path_refused, ledger_update, load_manifest, locked_json,
-    now_hm, owns, stage_of, with_claims, wps
+    now_hm, owns, shortcut_problems, stage_of, with_claims, wps
 )
 from stage import gate_check, gate_denials  # noqa: E402
 
@@ -175,13 +175,16 @@ def content_checks(owner_id, ent, rel, abs_path, tool, tinput):
         block(f"{owner_id}: {rel} is existing quality configuration. A rule is not relaxed to pass "
               "a check: fix the code. If it really has to change, return the blocked status your schema allows "
               "(BLOCKED for an implementer, BLOCKER for the others).")
+    if old is None:
+        try:
+            existed = tool == "Write" and abs_path.exists()
+            old = abs_path.read_text(encoding="utf-8", errors="replace") if existed else ""
+        except OSError:
+            old = ""
+    for what in shortcut_problems(rel, old, new):
+        block(f"{owner_id}: {what} in {rel}. Shortcuts hide failures instead of fixing them: remove it, or return the "
+              "blocked status your schema allows (BLOCKED for an implementer, BLOCKER for the others) and say why.")
     if TEST_PATH_RE.search(rel):
-        if old is None:
-            try:
-                old = (abs_path.read_text(encoding="utf-8", errors="replace")
-                       if tool == "Write" and abs_path.exists() else "")
-            except OSError:
-                old = ""
         if len(SKIP_MARKER_RE.findall(new)) > len(SKIP_MARKER_RE.findall(old)):
             block(f"{owner_id}: tests are not disabled to turn them green (skip, xfail, only…) in {rel}. "
                   "A failing test is fixed or reported: return the blocked status your schema allows (BLOCKED for an "
@@ -227,10 +230,18 @@ def report_gate(owner_id, tinput):
                   + f"\nRun `{cmd}`, fix your files and submit the report again. If a test contradicts "
                   "architecture.md, return BLOCKED and say which.")
 
+# The Workflow tool's subagents may arrive with this type instead of their agent's (issue 68, not verified): without a
+# claim they may not write files. Bash stays open, so a gatekeeper that carries the type still works.
+WORKFLOW_SUBAGENT = "workflow-subagent"
+FILE_WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+
+
 def require_claim(data, agent_id, owner_id):
     """An agent of a kind that must claim its zone cannot write before doing so."""
     if not owner_id and agent_id:
-        if not owner_id and data.get("agent_type") in claim_required_types():
+        unclaimed_writer = (data.get("agent_type") == WORKFLOW_SUBAGENT
+                            and data.get("tool_name") in FILE_WRITE_TOOLS)
+        if unclaimed_writer or data.get("agent_type") in claim_required_types():
             block("First of all, run `python3 .claude/bin/agentic.py claim <ID>` with your WP-ID "
                   "(or QA, AT, REVIEW, DOCS).")
 

@@ -17,7 +17,7 @@ from core import (  # noqa: E402
     HOOK_SEEN, LEDGER_STATES, ManifestError, PROTECTED_CONFIG_RE, ROOT, SECRET_RES, SKIP_MARKER_RE, STATE,
     TEST_PATH_RE, WP_ID_RE, at_entity, codemap_path, die, docs_entity, entities, flow_path_refused, ignored,
     ledger_read, ledger_stage, ledger_update, load_manifest, locked_json, owns, qa_entity,
-    review_entity, sibling, stage_of, wps
+    review_entity, shortcut_problems, sibling, stage_of, wps
 )
 from verification import acceptance_check, attribute, normal_failure, run_command  # noqa: E402
 
@@ -135,6 +135,7 @@ def content_problems(manifest, label, changes):
             problems.append(f"{path}: a test was disabled (skip, xfail, only…)")
         if existed and PROTECTED_CONFIG_RE.match(Path(path).name) and not ent.get("config_edit"):
             problems.append(f"{path}: existing quality configuration changed without config_edit")
+        problems += [f"{path}: {what}" for what in shortcut_problems(path, old, new)]
     return problems
 
 def check_stage(manifest, label):

@@ -144,6 +144,15 @@ NOTES = {
         "suites (new: test_install, test_guardrail, test_launcher, test_ci, test_manifest_check, test_repo_scan, "
         "test_layout). install removes intact copies from projects and keeps edited ones.",
     ],
+    "2.11.0": [
+        "Agent shortcuts are blocked: the hook refuses, and close-stage fails on, an exception swallowed with pass, an "
+        "empty catch block, an always-true assertion, a [DEBUG- log or a Python test without an assertion added to "
+        "code. Only what a change adds counts; what was already there is never blamed.",
+        "validate prints complexity warnings, never errors: a package with more than 15 files or 8 criteria, a wave "
+        "with more than 8 packages, a plan that is a chain of one-package waves. The thresholds are not measured.",
+        "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
+        "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
+    ],
     "2.2.0": [
         "The reviewer reads beyond the diff: a deterministic `callers` step lists, for every public symbol defined "
         "in a changed file (the code map's regexes, ten languages), the lines of tracked code outside the diff that "
