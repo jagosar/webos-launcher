@@ -46,6 +46,9 @@ Subcommands:
                       --check writes nothing: exit 3 if a published version (or plugin.json's untagged one) is missing.
   release-notes [VERSION]
                       Maintainers: the upgrade notes of VERSION (plugin.json's by default) as a Markdown list.
+  doctor [--fix]      JSON: what the flow left stale in this project; each finding is auto (--fix repairs it), route
+                      (names the command that does) or mention. Exit 3 while an auto or route finding remains.
+  plan-picture        Writes .claude/state/plan.html: the manifest's packages by wave, their dependencies and a table.
   claim ID            Binds the current subagent to a WP or to QA (recorded by the hook).
   status              Shows the ledger: the state of every agent and stage.
   mark ID ESTADO [NOTA]
@@ -292,6 +295,26 @@ def cmd_release_notes(args):
         die(str(e))
 
 
+def cmd_doctor(args):
+    if args not in ([], ["--fix"]):
+        die("Uso: doctor [--fix]")
+    summary = sibling("doctor").report(fix=bool(args))
+    print(json.dumps(summary, ensure_ascii=False))
+    return 0 if summary["ok"] else 3
+
+
+def cmd_plan_picture(args):
+    if args:
+        die("Uso: plan-picture")
+    manifest = require_valid()
+    packages = manifest.get("work_packages", [])
+    out = STATE / "plan.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(sibling("plan_picture").render(manifest), encoding="utf-8")
+    print(json.dumps({"path": out.relative_to(ROOT).as_posix(), "packages": len(packages),
+                      "waves": len({wp.get("wave") for wp in packages})}))
+
+
 def cmd_run_acceptance(args):
     run_acceptance(require_runnable())
 
@@ -339,7 +362,8 @@ COMMANDS = {
     "rules-sync": cmd_rules_sync, "callers": cmd_callers, "codemap": cmd_codemap, "docs-check": cmd_docs_check,
     "install": cmd_install, "flow-history": cmd_flow_history, "release-notes": cmd_release_notes,
     "run-acceptance": cmd_run_acceptance, "run-review": cmd_run_review, "acceptance": cmd_acceptance,
-    "snapshot": cmd_snapshot, "check-wave": cmd_check_wave, "run-wave": cmd_run_wave,
+    "snapshot": cmd_snapshot, "check-wave": cmd_check_wave, "run-wave": cmd_run_wave, "doctor": cmd_doctor,
+    "plan-picture": cmd_plan_picture,
 }
 
 

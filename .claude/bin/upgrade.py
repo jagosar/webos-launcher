@@ -153,6 +153,18 @@ NOTES = {
         "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
         "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
     ],
+    "2.12.0": [
+        "agentic.py doctor [--fix] lists what the flow left stale in a project, each finding with a severity: auto "
+        "(--fix repairs it: a leftover .claude/state/guard/ folder, a retired permission), route (names the command "
+        "that repairs it) or mention. It reads only, unless --fix.",
+        "agentic.py plan-picture writes .claude/state/plan.html, the manifest's packages by wave with their "
+        "dependencies, files and criteria; /architect shows it at the approval gate (architect.md changes).",
+        "The test-auditor also flags expected values that contradict the plan, as critical or high "
+        "(test-auditor.md changes: merge it if you edited yours).",
+        "Fix: 2.11.0 blocked every file write of the Workflow tool's subagents until they claimed a zone, also in "
+        "workflows that have nothing to do with the flow. They write freely again; a flow agent that skips its "
+        "claim is still caught when its stage closes.",
+    ],
     "2.2.0": [
         "The reviewer reads beyond the diff: a deterministic `callers` step lists, for every public symbol defined "
         "in a changed file (the code map's regexes, ten languages), the lines of tracked code outside the diff that "

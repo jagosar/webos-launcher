@@ -257,19 +257,20 @@ class ShortcutHookTests(RepoCase):
 
 
 class WorkflowSubagentTests(RepoCase):
-    """Design 0018 (issue 68): an unclaimed workflow-subagent may run Bash but not write files."""
+    """Issue 68: the Workflow tool's subagents carry this type, in any workflow (verified in a real run, where
+    2.11.0's claim rule blocked a workflow unrelated to the flow). Unclaimed, they are free like any other unknown
+    type; once claimed, the flow's zone rules apply."""
 
     AGENT = {"agent_id": "w1", "agent_type": "workflow-subagent"}
 
     def call(self, payload):
         return self.repo.run("hook", stdin=json.dumps({**payload, **self.AGENT}))
 
-    def test_without_a_claim_it_cannot_write_but_can_run_commands(self):
+    def test_without_a_claim_it_writes_and_runs_commands(self):
         for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
             with self.subTest(tool=tool):
-                r = self.call(write_payload(str(self.repo.dir / "src/a.py"), tool=tool))
-                self.assertEqual(r.returncode, 2, r.stderr)
-                self.assertIn("claim", r.stderr)
+                r = self.call(write_payload(str(self.repo.dir / "notes/chapter-1.md"), tool=tool))
+                self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.call(bash_payload("ls")).returncode, 0)
 
     def test_once_claimed_it_writes_only_its_zone(self):

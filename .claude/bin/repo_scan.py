@@ -66,14 +66,20 @@ def rules_hint(manifest):
     files = rule_files(manifest)
     return f" Rules you must follow (language and common): {', '.join(files)}." if files else ""
 
+def wanted_rules():
+    """The rule names rules_sync installs: "common" plus each declared or detected language with a file in the
+    library, sorted. It never exits: the missing-library check stays in rules_sync."""
+    # Stack entries are names, never paths: "../../x" must not copy a file out of the library or write outside it.
+    names = set(declared_stack()) | set(detect_stack())
+    return sorted({"common"} | {p for p in names
+                                if re.fullmatch(r"[a-z][a-z0-9+-]*", str(p)) and (RULES_LIBRARY / f"{p}.md").exists()})
+
 def rules_sync():
     """Copies the library to the directory Claude Code loads: common + declared or detected languages."""
     if not (RULES_LIBRARY / "common.md").exists():
         die(f"{RULES_LIBRARY.relative_to(ROOT)}/common.md does not exist: install the full flow (plugin or template).")
     declared, detected = declared_stack(), sorted(detect_stack())
-    # Stack entries are names, never paths: "../../x" must not copy a file out of the library or write outside it.
-    wanted = {"common"} | {p for p in set(declared) | set(detected)
-                           if re.fullmatch(r"[a-z][a-z0-9+-]*", str(p)) and (RULES_LIBRARY / f"{p}.md").exists()}
+    wanted = set(wanted_rules())
     RULES_DIR.mkdir(parents=True, exist_ok=True)
     installed, removed = [], []
     for name in sorted(wanted):

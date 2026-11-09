@@ -474,7 +474,7 @@ class StructureTests(unittest.TestCase):
     def test_commands_match_the_docstring(self):
         listed = set(re.findall(r"^  ([a-z][\w-]+)", agentic.__doc__.split("Subcommands:")[1], re.M))
         self.assertEqual(set(agentic.COMMANDS), listed)
-        self.assertEqual(len(agentic.COMMANDS), 34)
+        self.assertEqual(len(agentic.COMMANDS), 36)
 
     @FLOW_REPO_ONLY  # a project does not carry the flow's own guides
     def test_docs_list_every_module(self):
