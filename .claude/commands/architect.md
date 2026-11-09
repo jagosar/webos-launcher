@@ -252,6 +252,7 @@ The reviewer has not seen this conversation, on purpose.
   - number of ACs;
   - what the independent review found and what you corrected;
   - open risks.
+- **Show the plan as a picture:** run `python3 .claude/bin/agentic.py plan-picture` and give the user the path `.claude/state/plan.html` (the packages by wave, their dependencies, files and criteria).
 - **Ask for explicit approval.**
 - **Once you have it, archive the design:**
   1. Copy `architecture.md` to `docs/architecture/NNNN-<topic-in-kebab-case>.md`. `NNNN` is the next number.

@@ -230,18 +230,13 @@ def report_gate(owner_id, tinput):
                   + f"\nRun `{cmd}`, fix your files and submit the report again. If a test contradicts "
                   "architecture.md, return BLOCKED and say which.")
 
-# The Workflow tool's subagents may arrive with this type instead of their agent's (issue 68, not verified): without a
-# claim they may not write files. Bash stays open, so a gatekeeper that carries the type still works.
-WORKFLOW_SUBAGENT = "workflow-subagent"
-FILE_WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
-
-
+# The Workflow tool's subagents carry the type "workflow-subagent" in every workflow, the flow's or any other (issue
+# 68). 2.11.0 made them claim before writing and blocked workflows unrelated to the flow, so they are free again like
+# any unknown type: a flow agent that writes without its claim is caught when its stage closes (check-wave).
 def require_claim(data, agent_id, owner_id):
     """An agent of a kind that must claim its zone cannot write before doing so."""
     if not owner_id and agent_id:
-        unclaimed_writer = (data.get("agent_type") == WORKFLOW_SUBAGENT
-                            and data.get("tool_name") in FILE_WRITE_TOOLS)
-        if unclaimed_writer or data.get("agent_type") in claim_required_types():
+        if data.get("agent_type") in claim_required_types():
             block("First of all, run `python3 .claude/bin/agentic.py claim <ID>` with your WP-ID "
                   "(or QA, AT, REVIEW, DOCS).")
 
