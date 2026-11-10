@@ -12,6 +12,9 @@ which agentic.py binds to real commands and real `claude -p` runs, and the tests
 """
 import concurrent.futures
 import json
+import re
+
+from findings import blocks, text_sum, waiver_for
 
 
 def lines_json(output):
@@ -28,11 +31,12 @@ def compact(value):
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
+PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
+
+
 def render(template, **values):
-    out = template
-    for key, value in values.items():
-        out = out.replace("{" + key + "}", str(value))
-    return out
+    """Every {name} of the template replaced in one pass: inserted text (a printed rule, a caller) is never expanded."""
+    return PLACEHOLDER_RE.sub(lambda m: str(values[m.group(1)]) if m.group(1) in values else m.group(0), template)
 
 
 def brief(ident):
@@ -108,6 +112,20 @@ def pending_key(d):
     return (d.get("wp"), d.get("source"), d.get("file"), d.get("problem") or d.get("repro"))
 
 
+REVIEW_SOURCES = {"spec": "reviewer", "standards": "standards-reviewer"}
+POINTED_RULES = " Rules you must follow (language and common): {paths}."
+
+
+def rules_of(plan):
+    """(text for the prompts, how it arrived): the printed rules when they arrived whole, else their paths."""
+    text = plan.get("rules_text")
+    if isinstance(text, str) and text and text_sum(text) == plan.get("rules_sum"):
+        return text, "printed"
+    if plan.get("rules"):
+        return render(POINTED_RULES, paths=", ".join(plan["rules"])), "pointed"
+    return "", "none"
+
+
 class Pipeline:
     def __init__(self, spec, gate, agent, parallel=threaded, log=lambda m: None, start_wave=None, phase=lambda t: None,
                  wave_done=lambda wave: None):
@@ -121,6 +139,7 @@ class Pipeline:
         self.wave_done = wave_done
         self.plan = None
         self.rules = ""
+        self.impl_rules = ""  # the implementer's: the same, unless the plan keeps the rules away from it
         self.fix_count, self.fix_history, self.limit_pending = {}, {}, []
         self.qa_pending = []  # the last QA's design and no-WP items: they stay listed whatever comes after
         self.needs_review = []  # the last review's needs-validation items
@@ -244,11 +263,11 @@ class Pipeline:
         self.plan = lines_json(plan_step["output"]) if self.ok(plan_step) else None
         if not self.plan:
             return self.stop("prepare", "pipeline-plan failed: the manifest is not valid", gate=plan_step)
+        plan = self.plan
+        self.rules, self.run["rules"] = rules_of(plan)
+        self.impl_rules = "" if plan.get("implementer_rules") is False else self.rules
         if not self.ok(self.step(first, 2)):
             return self.stop("prepare", "briefs failed", gate=self.step(first, 2))
-        plan = self.plan
-        self.rules = (f" Rules you must follow (language and common): {', '.join(plan['rules'])}."
-                      if plan.get("rules") else "")
         if self.start_wave is None:
             self.phase("Baseline")
             base = self.step(self.seq(["baseline"], "baseline"), 0)
@@ -305,9 +324,9 @@ class Pipeline:
                                      rules=self.rules), "REVIEW")
             if not audit:
                 return self.stop("wave 0", "the test-auditor returned no report")
-            weak = [f for f in audit["findings"] if f["severity"] in self.blocking]
+            weak = [f for f in audit["findings"] if blocks(f, self.blocking)]
             self.run["test_audit"] = {"rounds": round_ + 1, "weak": weak,
-                                      "advisory": [f for f in audit["findings"] if f["severity"] not in self.blocking]}
+                                      "advisory": [f for f in audit["findings"] if not blocks(f, self.blocking)]}
             if not weak:
                 return None
             if round_ >= self.spec["constants"]["audit_rounds"] - 1:
@@ -325,7 +344,7 @@ class Pipeline:
         def thunk(wp):
             def go():
                 if not defects_by_wp:
-                    prompt = render(self.prompts["implement"], wp=wp, brief=brief(wp), rules=self.rules)
+                    prompt = render(self.prompts["implement"], wp=wp, brief=brief(wp), rules=self.impl_rules)
                 else:
                     attempt = self.fix_count.get(wp, 0) + 1
                     retry = ""
@@ -336,7 +355,7 @@ class Pipeline:
                                        previous=compact(previous),
                                        diff=f".claude/state/runs/{wp}.fix-{attempt - 1}.diff")
                     prompt = render(self.prompts["fix"], wp=wp, brief=brief(wp), defects=compact(defects_by_wp[wp]),
-                                    retry=retry, rules=self.rules)
+                                    retry=retry, rules=self.impl_rules)
                 return self.call(plan["agents"].get(wp) or "implementer", f"{wp} (fix)" if defects_by_wp else wp, prompt, wp)
             return go
         reports = self.parallel([thunk(wp) for wp in wp_ids])
@@ -357,7 +376,7 @@ class Pipeline:
             if fixing or wp in self.context_given or missing is None:
                 return None
             self.context_given.add(wp)
-            prompt = render(self.prompts["implement_full"], wp=wp, missing=missing, rules=self.rules)
+            prompt = render(self.prompts["implement_full"], wp=wp, missing=missing, rules=self.impl_rules)
             return lambda: self.call(plan["agents"].get(wp) or "implementer", f"{wp} (context)", prompt, wp)
         thunks = {wp: again(wp, rep) for wp, rep in zip(wp_ids, reports) if rep and rep.get("status") == "NEEDS_CONTEXT"}
         pending = [(wp, th) for wp, th in thunks.items() if th]
@@ -414,6 +433,53 @@ class Pipeline:
             self.fix_count[wp] = self.fix_count.get(wp, 0) + 1
         return out
 
+    def review(self, post):
+        """Both reviewers in parallel, one verifier per finding that blocks, the record per axis (never reranked).
+        Returns {"confirmed": [...]} or {"stopped": <result>}."""
+        self.phase("Review")
+        concerns = ("" if not self.concern_pending else render(
+            CONCERNS_PROMPT, items=compact([{"wp": c["wp"], "problem": c["problem"]} for c in self.concern_pending])))
+        found, truncated = callers_of(post[2] if len(post) > 2 else None)
+        callers = ("" if not found else render(CALLERS_PROMPT, items=compact(found),
+                                               truncated=CALLERS_TRUNCATED if truncated else ""))
+        prompts = (render(self.prompts["reviewer"], concerns=concerns, rules=self.rules, callers=callers),
+                   render(self.prompts["standards_reviewer"], rules=self.rules))
+        spec_r, std_r = self.parallel([
+            lambda: self.call("reviewer", "reviewer", prompts[0], "REVIEW"),
+            lambda: self.call("standards-reviewer", "standards-reviewer", prompts[1], "REVIEW")])
+        if not spec_r:
+            return {"stopped": self.stop("review", "the reviewer returned no report")}
+        if not std_r:
+            return {"stopped": self.stop("review", "the standards reviewer returned no report")}
+        waivers = self.plan.get("waivers") or []
+        axes = {"spec": [{**f, "axis": "spec"} for f in spec_r["findings"]],
+                "standards": [{**f, "axis": "standards"} for f in std_r["findings"]]}
+        waived = [{**f, "waiver": w["reason"]} for f in axes["standards"] for w in [waiver_for(f, waivers)] if w]
+        graves = [f for f in axes["spec"] + axes["standards"] if blocks(f, self.blocking, waivers)]
+        verdicts = self.parallel([
+            (lambda f=f: self.call("verifier", f"verify {f['file']}",
+                                   render(self.prompts["verifier"], finding=compact(f)), "REVIEW"))
+            for f in graves])
+        # A finding is only dismissed if the verifier refutes it with confidence. Uncertainty never downgrades a blocker.
+        refuted = [f for f, vd in zip(graves, verdicts)
+                   if vd and vd.get("is_real") is False and vd.get("confidence", 0) >= self.refute_confidence]
+        record = {}
+        for axis, items in axes.items():
+            mine = [f for f in graves if f["axis"] == axis]
+            record[axis] = {"confirmed": [f for f in mine if f not in refuted], "refuted": [f for f in mine if f in refuted],
+                            "advisory": [f for f in items if f not in graves and not waiver_for(f, waivers)]}
+        record["standards"]["waived"] = waived
+        self.run["review"] = {**record, **{k: record["spec"][k] + record["standards"][k]
+                                           for k in ("confirmed", "refuted", "advisory")},
+                              "waived": waived, "opened": self.ok(post[1] if len(post) > 1 else None),
+                              "callers": len(found)}
+        confirmed = self.run["review"]["confirmed"]
+        self.needs_review = [self.needs_item("reviewer", i) for i in spec_r.get("needs_validation") or []]
+        after = self.seq([f"close-stage review REVIEW={'fail' if confirmed else 'pass'}", "open-stage qa"], "close-stage review")
+        if not self.ok(self.step(after, 0)):
+            return {"stopped": self.stop("review", "files changed during the review stage (the reviewer must not write)")}
+        return {"confirmed": confirmed}
+
     def judge(self, post):
         plan, run = self.plan, self.run
         while True:
@@ -438,33 +504,10 @@ class Pipeline:
                 post = fixed["post"]
                 continue
 
-            self.phase("Review")
-            concerns = ("" if not self.concern_pending else render(
-                CONCERNS_PROMPT, items=compact([{"wp": c["wp"], "problem": c["problem"]} for c in self.concern_pending])))
-            found, truncated = callers_of(post[2] if len(post) > 2 else None)
-            callers = ("" if not found else render(CALLERS_PROMPT, items=compact(found),
-                                                   truncated=CALLERS_TRUNCATED if truncated else ""))
-            # callers goes last: a caller line that reads "{rules}" must not be expanded by render.
-            review = self.call("reviewer", "reviewer",
-                               render(self.prompts["reviewer"], concerns=concerns, rules=self.rules, callers=callers), "REVIEW")
-            if not review:
-                return self.stop("review", "the reviewer returned no report")
-            graves = [f for f in review["findings"] if f["severity"] in self.blocking]
-            verdicts = self.parallel([
-                (lambda f=f: self.call("verifier", f"verify {f['file']}",
-                                       render(self.prompts["verifier"], finding=compact(f)), "REVIEW"))
-                for f in graves])
-            # A finding is only dismissed if the verifier refutes it with confidence. Uncertainty never downgrades a blocker.
-            confirmed = [f for f, vd in zip(graves, verdicts)
-                         if not (vd and vd.get("is_real") is False and vd.get("confidence", 0) >= self.refute_confidence)]
-            refuted = [f for f in graves if f not in confirmed]
-            advisory = [f for f in review["findings"] if f["severity"] not in self.blocking]
-            run["review"] = {"confirmed": confirmed, "refuted": refuted, "advisory": advisory,
-                             "opened": self.ok(post[1] if len(post) > 1 else None), "callers": len(found)}
-            self.needs_review = [self.needs_item("reviewer", i) for i in review.get("needs_validation") or []]
-            after = self.seq([f"close-stage review REVIEW={'fail' if confirmed else 'pass'}", "open-stage qa"], "close-stage review")
-            if not self.ok(self.step(after, 0)):
-                return self.stop("review", "files changed during the review stage (the reviewer must not write)")
+            reviewed = self.review(post)
+            if "stopped" in reviewed:
+                return reviewed["stopped"]
+            confirmed = reviewed["confirmed"]
 
             self.phase("QA")
             qa = self.call("qa", "qa", render(self.prompts["qa"], rules=self.rules), "QA")
@@ -473,8 +516,8 @@ class Pipeline:
             run["qa"] = qa
 
             def blocking_impl(d):
-                return d["kind"] == "implementation" and d["severity"] in self.blocking
-            impl = ([{"source": "reviewer", **f} for f in confirmed]
+                return d["kind"] == "implementation" and blocks(d, self.blocking)
+            impl = ([{"source": REVIEW_SOURCES[f["axis"]], **f} for f in confirmed]
                     + [{"source": "qa", **d} for d in qa["defects"] if blocking_impl(d)])
             impl = [d for d in impl if d["wp"] in plan["wave_of"]]
             design = [d for d in qa["defects"] if d["kind"] == "design"]
@@ -488,7 +531,7 @@ class Pipeline:
             run["pending"] = self.qa_pending + list(self.limit_pending) + list(self.concern_pending)
             if not eligible:
                 run["result"] = ("REVIEW" if impl or qa["status"] == "BLOCKER"
-                                 or any(p.get("severity") in self.blocking for p in run["pending"]) else "OK")
+                                 or any(blocks(p, self.blocking) for p in run["pending"]) else "OK")
                 docs = run["result"] == "OK" and plan.get("docs")
                 fin = self.seq([close_qa] + ((["codemap"] if plan.get("codemap") else []) + ["open-stage docs"] if docs else []),
                                "close-stage qa")
@@ -496,7 +539,7 @@ class Pipeline:
                     return self.stop("qa", "files changed during the QA stage outside its zone")
                 if docs:
                     self.document(fin["steps"][1:])
-                    if any(p.get("severity") in self.blocking for p in run["pending"]):
+                    if any(blocks(p, self.blocking) for p in run["pending"]):
                         run["result"] = "REVIEW"
                 return run
 

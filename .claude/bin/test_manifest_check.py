@@ -87,5 +87,64 @@ class ComplexityWarningTests(unittest.TestCase):
         self.assertIn("warning: every wave holds one package", r.stdout)
         self.assertNotIn("warning:", repo.run("pipeline-plan").stdout)
 
+class WaiverTests(unittest.TestCase):
+    """waiver_errors: one error per waiver, the first that applies (design 0020)."""
+
+    def errors(self, waivers, rules="no magic numbers in code"):
+        manifest = dict(MANIFEST, waivers=waivers)
+        with mock.patch.object(manifest_check, "installed_rules_text", return_value=rules):
+            return manifest_check.waiver_errors(manifest)
+
+    def test_no_waivers_is_fine_and_a_non_list_is_an_error(self):
+        self.assertEqual(manifest_check.waiver_errors(MANIFEST), [])
+        self.assertEqual(self.errors("all"), ['waivers: must be a list of {"rule", "scope", "reason"}.'])
+
+    def test_a_bad_shape_is_one_error(self):
+        for waiver in ({"rule": "x"}, {"rule": 1, "scope": "src/a.py", "reason": "r"}, "text"):
+            with self.subTest(waiver=waiver):
+                self.assertEqual(self.errors([waiver]), ['waivers[0]: must be {"rule", "scope", "reason"}, all text'])
+
+    def test_a_scope_inside_a_folder_zone_is_narrow_enough(self):
+        ok = {"rule": "Magic numbers", "scope": "src/b/x.py", "reason": "ana: the tax table"}
+        self.assertEqual(self.errors([ok]), [])
+        self.assertEqual(self.errors([dict(ok, scope="src/b/")]), [])
+        self.assertIn("is wider than any package", self.errors([dict(ok, scope="lib/z.py")])[0])
+
+    def test_without_installed_rules_the_rule_is_not_checked(self):
+        ok = {"rule": "anything at all", "scope": "src/a.py", "reason": "ana: the tax table"}
+        self.assertEqual(self.errors([ok], rules=None), [])
+        self.assertIn("is not in the installed rules", self.errors([dict(ok, rule="no")])[0])
+
+
+class ProvenanceTests(unittest.TestCase):
+    """provenance_problems on texts built here: section 4b's Source column (design 0020)."""
+
+    def section(self, *rows, header="| What | Where | Source |"):
+        return "# A\n\n## 4b. Context\n" + "\n".join([header, "|---|---|---|", *rows]) + "\n\n## 5. Data\n"
+
+    def test_a_pipe_inside_backticks_is_not_a_cell(self):
+        self.assertEqual(manifest_check.table_cells("| a | `x | y` | read |"), ["a", "`x | y`", "read"])
+
+    def test_no_section_or_no_table_has_nothing_to_say(self):
+        self.assertEqual(manifest_check.provenance_problems("# A\n## 5. Data\n"), ([], []))
+        self.assertEqual(manifest_check.provenance_problems("## 4b. Context\nprose\n## 5. Data\n"), ([], []))
+
+    def test_inferred_rows_are_not_checked_and_source_is_case_blind(self):
+        text = self.section("| a | nowhere | Inferred |", "| b | `nope.py:1-2` | `inferred` |")
+        self.assertEqual(manifest_check.provenance_problems(text), ([], []))
+
+    def test_a_read_row_needs_an_existing_reference(self):
+        text = self.section("| a | `agentic.py:1-2` | read |")
+        errors, _ = manifest_check.provenance_problems(text)
+        self.assertEqual(errors, ["section 4b, row 1: agentic.py:1-2 does not exist or is out of range"],
+                         "references are relative to the project root")
+        ok = self.section("| a | `.claude/bin/agentic.py:1-2` | read |")
+        self.assertEqual(manifest_check.provenance_problems(ok), ([], []))
+
+    def test_a_fenced_heading_does_not_start_section_4b(self):
+        text = "# A\n```\n## 4b. not a section\n| a | b | Source |\n|---|---|---|\n| x | y | z |\n```\n"
+        self.assertEqual(manifest_check.provenance_problems(text), ([], []))
+
+
 if __name__ == "__main__":
     unittest.main()

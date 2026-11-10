@@ -31,6 +31,9 @@ const GATE_SCHEMA = {
   properties: { exit_code: { type: 'integer' }, output: { type: 'string' } },
 }
 const SEVERITY = { type: 'string', enum: ['critical', 'high', 'medium', 'low'] }
+// What happens to a finding: floor never ships, reflex blocks unless the plan waives it, finish never blocks.
+const JUDGE_TIER = { type: 'string', enum: ['floor', 'finish'] }
+const PROVENANCE = { type: 'string', enum: ['read', 'inferred'] }
 // What the agent did not check, skipped, or sees as a risk; [] when nothing.
 const NOT_CHECKED = { type: 'array', items: { type: 'string' } }
 // A claim the code alone cannot settle: no severity, never blocks, the person checks the fact.
@@ -76,8 +79,8 @@ const AUDIT_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['severity', 'wp', 'file', 'problem', 'evidence'],
-        properties: { severity: SEVERITY, wp: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer' }, problem: { type: 'string' }, evidence: { type: 'string' } },
+        required: ['tier', 'severity', 'wp', 'file', 'problem', 'evidence'],
+        properties: { tier: JUDGE_TIER, severity: SEVERITY, wp: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer' }, problem: { type: 'string' }, evidence: { type: 'string' } },
       },
     },
     not_checked: NOT_CHECKED,
@@ -93,11 +96,29 @@ const REVIEW_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['severity', 'wp', 'file', 'problem', 'evidence', 'fix', 'if_skipped'],
-        properties: { severity: SEVERITY, wp: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer' }, problem: { type: 'string' }, evidence: { type: 'string' }, fix: { type: 'string' }, if_skipped: { type: 'string' } },
+        required: ['tier', 'severity', 'provenance', 'wp', 'file', 'problem', 'evidence', 'fix', 'if_skipped'],
+        properties: { tier: JUDGE_TIER, severity: SEVERITY, wp: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer' }, problem: { type: 'string' }, evidence: { type: 'string' }, fix: { type: 'string' }, if_skipped: { type: 'string' }, provenance: PROVENANCE },
       },
     },
     needs_validation: NEEDS_VALIDATION,
+    not_checked: NOT_CHECKED,
+  },
+}
+// The Standards axis: breaches of a written rule (reflex) and notes (finish); "axis" tells its report from the others.
+const STANDARDS_SCHEMA = {
+  type: 'object',
+  required: ['status', 'axis', 'findings', 'not_checked'],
+  properties: {
+    status: { type: 'string', enum: ['PASS', 'FAIL'] },
+    axis: { type: 'string', enum: ['standards'] },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['tier', 'rule', 'provenance', 'wp', 'file', 'problem', 'evidence', 'fix', 'if_skipped'],
+        properties: { tier: { type: 'string', enum: ['reflex', 'finish'] }, rule: { type: 'string' }, provenance: PROVENANCE, wp: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer' }, problem: { type: 'string' }, evidence: { type: 'string' }, fix: { type: 'string' }, if_skipped: { type: 'string' } },
+      },
+    },
     not_checked: NOT_CHECKED,
   },
 }
@@ -116,8 +137,8 @@ const QA_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['id', 'severity', 'wp', 'kind', 'section', 'repro', 'fix', 'if_skipped'],
-        properties: { id: { type: 'string' }, severity: SEVERITY, wp: { type: 'string' }, kind: { type: 'string', enum: ['implementation', 'design'] }, section: { type: 'string' }, repro: { type: 'string' }, fix: { type: 'string' }, if_skipped: { type: 'string' } },
+        required: ['tier', 'id', 'severity', 'wp', 'kind', 'section', 'repro', 'fix', 'if_skipped'],
+        properties: { tier: JUDGE_TIER, id: { type: 'string' }, severity: SEVERITY, wp: { type: 'string' }, kind: { type: 'string', enum: ['implementation', 'design'] }, section: { type: 'string' }, repro: { type: 'string' }, fix: { type: 'string' }, if_skipped: { type: 'string' } },
       },
     },
     gaps: { type: 'array', items: { type: 'string' } },
@@ -160,6 +181,27 @@ const seq = async (cmds, label) => {
 const step = (res, i) => (res && res.steps[i]) || null
 const ok = st => !!st && st.exit_code === 0
 const BLOCKING = new Set(['critical', 'high'])
+// findings.py, the same rules: a finding with no tier keeps its severity's meaning.
+const TIERS = ['floor', 'reflex', 'finish']
+const tierOf = f => (f && TIERS.includes(f.tier) ? f.tier : f && BLOCKING.has(f.severity) ? 'floor' : 'finish')
+const inScope = (path, scope) => typeof path === 'string' && typeof scope === 'string' && scope !== '' &&
+  (scope.endsWith('/') ? path.startsWith(scope) : path === scope)
+const ruleKey = t => (typeof t === 'string' ? t.trim().toLowerCase() : '')
+const waiverFor = (f, waivers) => {
+  const rule = f && f.tier === 'reflex' ? ruleKey(f.rule) : ''
+  if (!rule) return null
+  return (waivers || []).find(w => w && typeof w === 'object' && ruleKey(w.rule) &&
+    (rule.includes(ruleKey(w.rule)) || ruleKey(w.rule).includes(rule)) && inScope(f.file, w.scope)) || null
+}
+const blocks = (f, waivers) => {
+  const tier = tierOf(f)
+  return tier === 'reflex' ? !waiverFor(f, waivers) : tier === 'floor'
+}
+const textSum = text => {
+  let sum = 0
+  for (const ch of text) sum = (sum + ch.codePointAt(0)) % 1000000007
+  return sum
+}
 // Each agent reads the slice of architecture.md that `agentic.py briefs` wrote for it, not the whole document.
 const brief = id => `.claude/state/briefs/${id}.md`
 const REFUTE_CONFIDENCE = 0.7
@@ -303,7 +345,7 @@ async function launchWave(wave, wpIds, defectsByWp) {
           'If you try something different, say in internal_decisions how it differs and why it should work.'
       }
     }
-    return report(prompt + RULES, { agentType: plan.agents[wp] || 'implementer', label: defectsByWp ? `${wp} (fix)` : wp, schema: REPORT_SCHEMA })
+    return report(prompt + IMPLEMENTER_RULES, { agentType: plan.agents[wp] || 'implementer', label: defectsByWp ? `${wp} (fix)` : wp, schema: REPORT_SCHEMA })
   }))
   const withContext = await withWholeDocument(wpIds, reports, !!defectsByWp)
   wpIds.forEach((wp, i) => {
@@ -325,7 +367,7 @@ async function withWholeDocument(wpIds, reports, fixing) {
     if (missing === null) return
     contextGiven.add(wp)
     const prompt = `Implement ${wp}. Your first attempt returned NEEDS_CONTEXT: ${missing}. This time your brief is architecture.md, whole: read it and implement. If the document does not settle it, return BLOCKED with the section that should.`
-    again.push({ i, run: () => report(prompt + RULES, { agentType: plan.agents[wp] || 'implementer', label: `${wp} (context)`, schema: REPORT_SCHEMA }) })
+    again.push({ i, run: () => report(prompt + IMPLEMENTER_RULES, { agentType: plan.agents[wp] || 'implementer', label: `${wp} (context)`, schema: REPORT_SCHEMA }) })
   })
   if (!again.length) return reports
   const second = await parallel(again.map(a => a.run))
@@ -399,8 +441,71 @@ if (hookStep && !ok(hookStep)) return stop('prepare', HOOKS_DEAD, { gate: hookSt
 const planStep = step(first, 1)
 const plan = ok(planStep) ? lastJson(planStep.output) : null
 if (!plan) return stop('prepare', 'pipeline-plan failed: the manifest is not valid', { gate: planStep })
-// Language rules (rules-sync): every agent that writes or judges code receives them in its prompt.
-const RULES = plan.rules && plan.rules.length ? ` Rules you must follow (language and common): ${plan.rules.join(', ')}.` : ''
+// Language rules (rules-sync): every agent that writes or judges code receives them, printed when their text arrived
+// whole through the gatekeeper (the checksum), else as their paths.
+const rulesIntact = typeof plan.rules_text === 'string' && plan.rules_text !== '' &&
+  textSum(plan.rules_text) === plan.rules_sum
+const RULES = rulesIntact ? plan.rules_text
+  : plan.rules && plan.rules.length ? ` Rules you must follow (language and common): ${plan.rules.join(', ')}.` : ''
+run.rules = rulesIntact ? 'printed' : RULES ? 'pointed' : 'none'
+const IMPLEMENTER_RULES = plan.implementer_rules === false ? '' : RULES
+const WAIVERS = Array.isArray(plan.waivers) ? plan.waivers : []
+const REVIEW_SOURCES = { spec: 'reviewer', standards: 'standards-reviewer' }
+// Both reviewers in parallel, one verifier per finding that blocks, the record per axis (never reranked).
+const reviewStage = async post => {
+  phase('Review')
+  const concerns = concernPending.length
+    ? `\nThe implementers finished with these concerns about their own code, as JSON:\n${JSON.stringify(concernPending.map(c => ({ wp: c.wp, problem: c.problem })))}\nCheck each one: confirm it as a finding with its severity, or leave it out if the code is right.`
+    : ''
+  // What the `callers` step reported: the lines outside the diff that use a changed public symbol; [] when the step is
+  // missing, failed or is not its JSON.
+  const foundCallers = post[2] ? lastJson(post[2].output) : null
+  const callerItems = foundCallers && Array.isArray(foundCallers.callers) && foundCallers.callers.length ? foundCallers.callers : []
+  const callers = callerItems.length
+    ? `\nCallers, outside the diff, of the public symbols this change defines or modifies (the reviewer must read them), as JSON:\n${JSON.stringify(callerItems)}\nA change that breaks one of them is a finding on the package that owns the changed symbol, even though the caller's file was not touched.${foundCallers.truncated ? ' The list is truncated.' : ''}`
+    : ''
+  const [specR, stdR] = await parallel([
+    () => report('Review the integrated code according to architecture.md.' + callers + concerns + RULES, { agentType: 'reviewer', label: 'reviewer', schema: REVIEW_SCHEMA }),
+    () => report('Review the integrated code against section 7 of architecture.md and the rules below. Report only breaches of a written rule: name it in "rule".' + RULES, { agentType: 'standards-reviewer', label: 'standards-reviewer', schema: STANDARDS_SCHEMA }),
+  ])
+  if (!specR) return { stopped: stop('review', 'the reviewer returned no report') }
+  if (!stdR) return { stopped: stop('review', 'the standards reviewer returned no report') }
+  const axes = {
+    spec: specR.findings.map(f => ({ ...f, axis: 'spec' })),
+    standards: stdR.findings.map(f => ({ ...f, axis: 'standards' })),
+  }
+  const waived = axes.standards.filter(f => waiverFor(f, WAIVERS))
+    .map(f => ({ ...f, waiver: waiverFor(f, WAIVERS).reason }))
+  const graves = [...axes.spec, ...axes.standards].filter(f => blocks(f, WAIVERS))
+  const verdicts = await parallel(graves.map(f => () =>
+    report(`Try to refute this finding from the reviewer, as JSON:\n${JSON.stringify(f)}`, { agentType: 'verifier', label: `verify ${f.file}`, schema: VERDICT_SCHEMA })))
+  // A finding is only dismissed if the verifier refutes it with confidence. Uncertainty never downgrades a blocker.
+  const refuted = graves.filter((f, i) =>
+    verdicts[i] && verdicts[i].is_real === false && verdicts[i].confidence >= REFUTE_CONFIDENCE)
+  const record = {}
+  for (const axis of ['spec', 'standards']) {
+    const mine = graves.filter(f => f.axis === axis)
+    record[axis] = {
+      confirmed: mine.filter(f => !refuted.includes(f)),
+      refuted: mine.filter(f => refuted.includes(f)),
+      advisory: axes[axis].filter(f => !graves.includes(f) && !waiverFor(f, WAIVERS)),
+    }
+  }
+  record.standards.waived = waived
+  const union = k => [...record.spec[k], ...record.standards[k]]
+  run.review = {
+    ...record, confirmed: union('confirmed'), refuted: union('refuted'), advisory: union('advisory'), waived,
+    opened: ok(post[1]), callers: callerItems.length,
+  }
+  needsReview = (specR.needs_validation || []).map(i => needsItem('reviewer', i))
+  // The reviewers are read-only: if closing their stage finds changes, someone wrote where nobody may.
+  const closeReview = `close-stage review REVIEW=${run.review.confirmed.length ? 'fail' : 'pass'}`
+  const afterReview = await seq([closeReview, 'open-stage qa'], 'close-stage review')
+  if (!ok(step(afterReview, 0))) {
+    return { stopped: stop('review', 'files changed during the review stage (the reviewer must not write)') }
+  }
+  return { confirmed: run.review.confirmed }
+}
 // The rest of the run, from briefs on.
 const runAfterPlan = async () => {
 if (!ok(step(first, 2))) return stop('prepare', 'briefs failed', { gate: step(first, 2) })
@@ -439,8 +544,8 @@ if (startWave === null && plan.acceptance) {
       const audit = await report(`Audit the acceptance tests against the brief they were written from, ${brief('AT')}. The test-author reports this coverage, as JSON:\n${JSON.stringify(at.coverage)}` + RULES,
         { agentType: 'test-auditor', label: round ? 'test-auditor (revision)' : 'test-auditor', schema: AUDIT_SCHEMA })
       if (!audit) return stop('wave 0', 'the test-auditor returned no report')
-      const weak = audit.findings.filter(f => BLOCKING.has(f.severity))
-      run.test_audit = { rounds: round + 1, weak, advisory: audit.findings.filter(f => !BLOCKING.has(f.severity)) }
+      const weak = audit.findings.filter(f => blocks(f))
+      run.test_audit = { rounds: round + 1, weak, advisory: audit.findings.filter(f => !blocks(f)) }
       if (!weak.length) break
       if (round >= 1) return stop('wave 0', 'the acceptance tests are still weak after one revision: architecture.md or the criteria need review', { test_audit: run.test_audit })
       const reopen = step(await seq(['open-stage acceptance'], 'open-stage acceptance'), 0)
@@ -486,31 +591,9 @@ while (true) {
     continue
   }
 
-  phase('Review')
-  const concerns = concernPending.length
-    ? `\nThe implementers finished with these concerns about their own code, as JSON:\n${JSON.stringify(concernPending.map(c => ({ wp: c.wp, problem: c.problem })))}\nCheck each one: confirm it as a finding with its severity, or leave it out if the code is right.`
-    : ''
-  // What the `callers` step reported: the lines outside the diff that use a changed public symbol; [] when the step is
-  // missing, failed or is not its JSON.
-  const foundCallers = post[2] ? lastJson(post[2].output) : null
-  const callerItems = foundCallers && Array.isArray(foundCallers.callers) && foundCallers.callers.length ? foundCallers.callers : []
-  const callers = callerItems.length
-    ? `\nCallers, outside the diff, of the public symbols this change defines or modifies (the reviewer must read them), as JSON:\n${JSON.stringify(callerItems)}\nA change that breaks one of them is a finding on the package that owns the changed symbol, even though the caller's file was not touched.${foundCallers.truncated ? ' The list is truncated.' : ''}`
-    : ''
-  const review = await report('Review the integrated code according to architecture.md.' + callers + concerns + RULES, { agentType: 'reviewer', label: 'reviewer', schema: REVIEW_SCHEMA })
-  if (!review) return stop('review', 'the reviewer returned no report')
-  const graves = review.findings.filter(f => BLOCKING.has(f.severity))
-  const verdicts = await parallel(graves.map(f => () =>
-    report(`Try to refute this finding from the reviewer, as JSON:\n${JSON.stringify(f)}`, { agentType: 'verifier', label: `verify ${f.file}`, schema: VERDICT_SCHEMA })))
-  // A finding is only dismissed if the verifier refutes it with confidence. Uncertainty never downgrades a blocker.
-  const confirmed = graves.filter((f, i) => !(verdicts[i] && verdicts[i].is_real === false && verdicts[i].confidence >= REFUTE_CONFIDENCE))
-  const refuted = graves.filter(f => !confirmed.includes(f))
-  const advisory = review.findings.filter(f => !BLOCKING.has(f.severity))
-  run.review = { confirmed, refuted, advisory, opened: ok(post[1]), callers: callerItems.length }
-  needsReview = (review.needs_validation || []).map(i => needsItem('reviewer', i))
-  // The reviewer is read-only: if closing its stage finds changes, someone wrote where nobody may.
-  const afterReview = await seq([`close-stage review REVIEW=${confirmed.length ? 'fail' : 'pass'}`, 'open-stage qa'], 'close-stage review')
-  if (!ok(step(afterReview, 0))) return stop('review', 'files changed during the review stage (the reviewer must not write)')
+  const reviewed = await reviewStage(post)
+  if (reviewed.stopped) return reviewed.stopped
+  const confirmed = reviewed.confirmed
 
   phase('QA')
   const qa = await report('Run the system\'s QA validation according to architecture.md.' + RULES, { agentType: 'qa', label: 'qa', schema: QA_SCHEMA })
@@ -518,11 +601,11 @@ while (true) {
   run.qa = qa
 
   const implDefects = [
-    ...confirmed.map(f => ({ source: 'reviewer', ...f })),
-    ...qa.defects.filter(d => d.kind === 'implementation' && BLOCKING.has(d.severity)).map(d => ({ source: 'qa', ...d })),
+    ...confirmed.map(f => ({ source: REVIEW_SOURCES[f.axis], ...f })),
+    ...qa.defects.filter(d => d.kind === 'implementation' && blocks(d)).map(d => ({ source: 'qa', ...d })),
   ].filter(d => isWp(d.wp))
   const designDefects = qa.defects.filter(d => d.kind === 'design')
-  const unassigned = [...confirmed, ...qa.defects.filter(d => d.kind === 'implementation' && BLOCKING.has(d.severity))]
+  const unassigned = [...confirmed, ...qa.defects.filter(d => d.kind === 'implementation' && blocks(d))]
     .filter(d => !isWp(d.wp))
   const baseline = [...designDefects.map(d => ({ type: 'design', ...d })), ...unassigned.map(d => ({ type: 'no WP', ...d })),
     ...needsReview, ...(qa.needs_validation || []).map(i => needsItem('qa', i))]
@@ -532,13 +615,13 @@ while (true) {
   qaPending = baseline
   run.pending = [...qaPending, ...limitPending, ...concernPending]
   if (eligible.length === 0) {
-    run.result = implDefects.length || qa.status === 'BLOCKER' || run.pending.some(p => BLOCKING.has(p.severity)) ? 'REVIEW' : 'OK'
+    run.result = implDefects.length || qa.status === 'BLOCKER' || run.pending.some(p => blocks(p)) ? 'REVIEW' : 'OK'
     const docs = run.result === 'OK' && plan.docs
     const fin = await seq([closeQa, ...(docs ? [...(plan.codemap ? ['codemap'] : []), 'open-stage docs'] : [])], 'close-stage qa')
     if (!ok(step(fin, 0))) return stop('qa', 'files changed during the QA stage outside its zone')
     if (docs) {
       await documentStage(fin.steps.slice(1))
-      if (run.pending.some(p => BLOCKING.has(p.severity))) run.result = 'REVIEW'
+      if (run.pending.some(p => blocks(p))) run.result = 'REVIEW'
     }
     return run
   }

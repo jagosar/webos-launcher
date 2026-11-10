@@ -36,6 +36,8 @@ AGENTS = {
     "test-author": {"model": "sonnet", "tools": WRITE_TOOLS, "claim": "AT"},
     "qa": {"model": "sonnet", "tools": WRITE_TOOLS, "claim": "QA"},
     "reviewer": {"model": "sonnet", "tools": {"Read", "Glob", "Grep", "Bash", "StructuredOutput"}, "claim": "REVIEW"},
+    "standards-reviewer": {"model": "sonnet", "tools": {"Read", "Glob", "Grep", "Bash", "StructuredOutput"},
+                           "claim": "REVIEW"},
     "verifier": {"model": "sonnet", "tools": {"Read", "Glob", "Grep", "StructuredOutput"}},
     "plan-reviewer": {"model": "opus", "tools": {"Read", "Glob", "Grep"}},
     "test-auditor": {"model": "sonnet", "tools": {"Read", "Glob", "Grep", "StructuredOutput"}},
@@ -45,7 +47,7 @@ AGENTS = {
 COMMANDS = {"architect": "opus", "implement": "sonnet"}
 # Manifest fields agentic.py understands: all must be documented in /architect.
 MANIFEST_FIELDS = ["work_packages", "id", "wave", "depends_on", "files", "allow_bash", "acceptance", "verify",
-                   "qa", "ignore", "agent", "mirror", "config_edit", "stack", "docs", "codemap"]
+                   "qa", "ignore", "agent", "mirror", "config_edit", "stack", "docs", "codemap", "waivers"]
 RULES_LIBRARY = CLAUDE / "rules-library"
 RULE_SECTIONS = ["## Style", "## Errors", "## Tests", "## Security", "## Common commands"]
 PERSONAL_PATH_RE = re.compile(r"/home/[a-z][\w.-]*/|/tmp/claude-\d+|C:\\Users\\|/Users/[a-z][\w.-]+/")
@@ -111,7 +113,8 @@ class AgentDefinitionTests(unittest.TestCase):
                 self.assertIn(f"python3 .claude/bin/agentic.py claim {spec['claim']}", body)
 
     def test_report_is_json_by_schema(self):
-        for name in ("implementer", "test-author", "test-auditor", "qa", "reviewer", "doc-updater"):
+        for name in ("implementer", "test-author", "test-auditor", "qa", "reviewer", "standards-reviewer",
+                     "doc-updater"):
             with self.subTest(agent=name):
                 body = frontmatter(AGENTS_DIR / f"{name}.md")[1]
                 self.assertNotIn("STATUS:", body, "the text report format is gone: the launchers use a JSON schema")
@@ -141,6 +144,27 @@ class AgentDefinitionTests(unittest.TestCase):
                 with self.subTest(agent=name, phrase=phrase):
                     self.assertIn(phrase, body)
 
+    def test_judges_use_one_scale_and_say_where_facts_come_from(self):
+        for name in ("reviewer", "standards-reviewer"):
+            body = (AGENTS_DIR / f"{name}.md").read_text(encoding="utf-8")
+            for phrase in ("# Tiers", "`tier`", "`provenance`", "No concrete case, no finding"):
+                with self.subTest(agent=name, phrase=phrase):
+                    self.assertIn(phrase, body)
+        standards = (AGENTS_DIR / "standards-reviewer.md").read_text(encoding="utf-8")
+        for phrase in ("the rule's opening words", "Never report a floor", "`axis`"):
+            self.assertIn(phrase, standards)
+        for name in ("qa", "test-auditor"):
+            body = (AGENTS_DIR / f"{name}.md").read_text(encoding="utf-8")
+            for phrase in ("`tier`", "`floor`", "`finish`"):
+                with self.subTest(agent=name, phrase=phrase):
+                    self.assertIn(phrase, body)
+        self.assertIn("inferred", (AGENTS_DIR / "verifier.md").read_text(encoding="utf-8"))
+
+    def test_test_auditor_flags_wrong_expected_values(self):
+        body = (AGENTS_DIR / "test-auditor.md").read_text(encoding="utf-8")
+        for phrase in ("**Wrong:**", "contradicts the criterion's Expected", "wrong expected value"):
+            self.assertIn(phrase, body)
+
     def test_reviewer_reads_the_callers_outside_the_diff(self):
         body = (AGENTS_DIR / "reviewer.md").read_text(encoding="utf-8")
         for phrase in ("the callers your prompt lists", "Read each one and check that the change keeps it working",
@@ -157,7 +181,7 @@ class AgentDefinitionTests(unittest.TestCase):
                     self.assertIn(field, report)
 
     def test_reports_say_what_was_not_checked(self):
-        for name in ("implementer", "test-author", "test-auditor", "reviewer"):
+        for name in ("implementer", "test-author", "test-auditor", "reviewer", "standards-reviewer"):
             with self.subTest(agent=name):
                 body = (AGENTS_DIR / f"{name}.md").read_text(encoding="utf-8")
                 self.assertIn("`not_checked`", body[body.index("# Report"):])

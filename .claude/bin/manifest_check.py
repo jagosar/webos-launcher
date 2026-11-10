@@ -10,10 +10,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compat  # noqa: E402  - the operating-system layer, next to this file
 from core import (  # noqa: E402
-    ARCHIVE_DIR, FLOW_NAME, ManifestError, RESERVED_IDS, ROOT, RULES_LIBRARY, TEMPLATE_MARKER, VERIFY_PHASES,
+    ARCHIVE_DIR, FLOW_NAME, ManifestError, RESERVED_IDS, ROOT, RULES_DIR, RULES_LIBRARY, TEMPLATE_MARKER, VERIFY_PHASES,
     WORKER_MODEL, WP_ID_RE, at_entity, die, docs_entity, entities, is_flow_repo, load_manifest, maintainer_mode,
     never_owned_problem, owner_conflict, owns, qa_entity, wps
 )
+from brief import split  # noqa: E402
 
 MIRROR_RE = re.compile(r"^([^:]+?)(?::(\d+)(?:-(\d+))?)?$")  # path[:start[-end]]
 
@@ -66,7 +67,7 @@ def validate(manifest):
     errors = maintainer_errors(manifest) + package_errors(manifest, table) + ownership_errors(manifest, maintainer)
     errors += command_errors(manifest) + shape_errors(manifest)
     errors += stack_errors(manifest) + docs_errors(manifest)
-    errors += agent_model_errors(manifest)
+    errors += agent_model_errors(manifest) + waiver_errors(manifest)
     return errors
 
 # Advice from validate, never errors (issue 60): just above the largest values of the 17 archived plans (14 files,
@@ -252,7 +253,8 @@ def frontmatter_model(path):
 def agent_model_errors(manifest):
     """Orchestrated agents on the latest Sonnet and the architect on the latest Opus, declared by alias."""
     errors = []
-    names = ({"implementer", "qa", "test-author", "test-auditor", "reviewer", "gatekeeper", "verifier"}
+    names = ({"implementer", "qa", "test-author", "test-auditor", "reviewer", "standards-reviewer", "gatekeeper",
+              "verifier"}
              | {wp.get("agent", "implementer") for wp in wps(manifest).values()})
     if docs_entity(manifest):
         names.add("doc-updater")
@@ -300,6 +302,119 @@ def mirror_errors(wp):
             if not (1 <= a <= b <= n):
                 errors.append(f"{wp['id']}: mirror {ref} out of range ({rel} has {n} lines).")
     return errors
+
+# ---------- waivers: reflex findings the plan accepts, with the narrowest scope and who decided ----------
+
+WAIVER_KEYS = {"rule", "scope", "reason"}
+WAIVER_REASON_RE = re.compile(r"^[^:\s][^:]*: \S.{9,}$")
+WAIVER_MIN_RULE = 3
+SCOPE_FORBIDDEN = set("*?[")
+
+def installed_rules_text():
+    """The text of the installed rules (the library when none are installed), casefolded; None when neither exists."""
+    for folder in (RULES_DIR, RULES_LIBRARY):
+        files = sorted(folder.glob("*.md")) if folder.is_dir() else []
+        if files:
+            return "\n".join(f.read_text(encoding="utf-8") for f in files).casefold()
+    return None
+
+def scope_shape_ok(scope):
+    return (bool(scope) and scope not in (".", "./") and not scope.startswith("/")
+            and ".." not in Path(scope).parts and not (SCOPE_FORBIDDEN & set(scope)))
+
+def scope_in_a_zone(scope, table):
+    return any(scope == f or (f.endswith("/") and scope.startswith(f))
+               for wp in table.values() for f in wp.get("files", []) if isinstance(f, str))
+
+def waiver_problem(waiver, table, rules, earlier):
+    """The first problem of one waiver, or None."""
+    shaped = isinstance(waiver, dict) and set(waiver) == WAIVER_KEYS
+    if not (shaped and all(isinstance(v, str) for v in waiver.values())):
+        return 'must be {"rule", "scope", "reason"}, all text'
+    rule, scope = waiver["rule"].strip().casefold(), waiver["scope"]
+    if rules is not None and (len(rule) < WAIVER_MIN_RULE or rule not in rules):
+        return f'rule "{waiver["rule"]}" is not in the installed rules'
+    if not scope_shape_ok(scope):
+        return f'scope "{scope}" must be one file or one folder ending in "/"'
+    if not scope_in_a_zone(scope, table):
+        return f'scope "{scope}" is wider than any package\'s files'
+    if not WAIVER_REASON_RE.match(waiver["reason"]):
+        return 'reason must be "<who decided>: <evidence>"'
+    key = (rule, scope)
+    return f"repeats waivers[{earlier[key]}]" if key in earlier else None
+
+def waiver_errors(manifest):
+    """The optional "waivers" list: at most one error per waiver, the first that applies."""
+    waivers = manifest.get("waivers")
+    if waivers is None:
+        return []
+    if not isinstance(waivers, list):
+        return ['waivers: must be a list of {"rule", "scope", "reason"}.']
+    table, rules, earlier, errors = wps(manifest), installed_rules_text(), {}, []
+    for i, waiver in enumerate(waivers):
+        problem = waiver_problem(waiver, table, rules, earlier)
+        if problem:
+            errors.append(f"waivers[{i}]: {problem}")
+        else:
+            earlier[(waiver["rule"].strip().casefold(), waiver["scope"])] = i
+    return errors
+
+
+# ---------- section 4b: where each fact of the plan comes from ----------
+
+REF_TOKEN_RE = re.compile(r"^[\w./-]+\.\w+:\d+(-\d+)?$")
+SOURCES = ("read", "inferred")
+
+def table_cells(line):
+    """The cells of a markdown table row, split on "|" outside backticks."""
+    cells, current, quoted = [], "", False
+    for ch in line.strip():
+        if ch == "`":
+            quoted = not quoted
+        if ch == "|" and not quoted:
+            cells.append(current)
+            current = ""
+        else:
+            current += ch
+    cells.append(current)
+    return [c.strip() for c in cells[1:-1]] if line.strip().endswith("|") else [c.strip() for c in cells[1:]]
+
+def reference_ok(token):
+    path, _, lines = token.rpartition(":")
+    a, _, b = lines.partition("-")
+    f = ROOT / path
+    if ".." in Path(path).parts or path.startswith("/") or not f.is_file():
+        return False
+    n = sum(1 for _ in f.open(encoding="utf-8", errors="replace"))
+    return 1 <= int(a) <= int(b or a) <= n
+
+def row_problem(n, cells, column):
+    source = cells[column].replace("`", "").strip().casefold() if column < len(cells) else ""
+    if source not in SOURCES:
+        return f"section 4b, row {n}: Source must be read or inferred"
+    if source == "inferred":
+        return None
+    tokens = [t for cell in cells for t in re.findall(r"`([^`]+)`", cell) if REF_TOKEN_RE.match(t)]
+    if not tokens:
+        return f"section 4b, row {n}: read needs a file:line"
+    bad = next((t for t in tokens if not reference_ok(t)), None)
+    return f"section 4b, row {n}: {bad} does not exist or is out of range" if bad else None
+
+def provenance_problems(text):
+    """(errors, warnings) for section 4b of an architecture.md text: each row read (checked) or inferred."""
+    body = next((lines for kind, key, lines in split(text) if kind == "section" and key == "4b"), None)
+    rows = [line for line in body or [] if line.lstrip().startswith("|")]
+    if len(rows) < 2:
+        return [], []
+    header = [c.casefold() for c in table_cells(rows[0])]
+    if "source" not in header:
+        return [], ["section 4b has no Source column: mark each row read or inferred"]
+    column, errors = header.index("source"), []
+    for n, row in enumerate(rows[2:], 1):
+        problem = row_problem(n, table_cells(row), column)
+        if problem:
+            errors.append(problem)
+    return errors, []
 
 def require_valid():
     try:

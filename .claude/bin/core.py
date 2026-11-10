@@ -397,8 +397,8 @@ def status_to_state(status):
             "STOPPED": "stopped"}.get(head, "error")
 
 def stage_of(jid):
-    if jid in ("QA", "AT", "REVIEW", "DOCS"):
-        return {"QA": "qa", "AT": "acceptance", "REVIEW": "review", "DOCS": "docs"}[jid]
+    if jid in ("QA", "AT", "REVIEW", "STANDARDS", "DOCS"):
+        return {"QA": "qa", "AT": "acceptance", "REVIEW": "review", "STANDARDS": "review", "DOCS": "docs"}[jid]
     try:
         return str(wps(load_manifest()).get(jid, {}).get("wave", "?"))
     except ManifestError:

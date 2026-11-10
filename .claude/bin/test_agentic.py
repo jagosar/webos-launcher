@@ -1665,10 +1665,10 @@ class LauncherTests(Base):
         (self.logs / "x").write_text("", encoding="utf-8")
         r = self.repo.run("run-review", env={"FAKE_STATUS": "PASS"})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        a = self.args("REVIEW")
-        self.assertEqual(a[a.index("--agent") + 1], "reviewer")
-        for tool in ("Write", "Edit"):
-            self.assertNotIn(tool, a)
+        for a in [c["argv"] for c in testutil.fake_calls(self.logs, "REVIEW")]:
+            self.assertIn(a[a.index("--agent") + 1], ("reviewer", "standards-reviewer"))
+            for tool in ("Write", "Edit"):
+                self.assertNotIn(tool, a)
 
     def test_implementers_may_run_acceptance(self):
         self.repo.run("run-wave", "1")

@@ -18,7 +18,8 @@ from core import (  # noqa: E402
     usage_records, usage_summary, wps
 )
 from stage import check_stage, snapshot, stage_owners  # noqa: E402
-from repo_scan import rule_files, rules_hint  # noqa: E402
+from repo_scan import rule_files, rules_hint, rules_text  # noqa: E402
+from findings import blocks, text_sum, waiver_for  # noqa: E402
 
 TYPE_RE = re.compile(r"^(?:Type|Tipo):\s*(feature|change|fix|refactor)\b", re.M | re.I)
 
@@ -26,7 +27,11 @@ REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(git diff:*)", "Bash(git status:*)"
 
 REPORT_FILE_RE = re.compile(r"^(REVIEW|QA)-(\d+)\.json$")
 
-REPORT_KEYS = {"REVIEW": "findings", "QA": "defects"}
+REPORT_KEYS = {"REVIEW": "findings", "STANDARDS": "findings", "QA": "defects"}
+
+REPORT_TAGS = {"REVIEW": "reviewer", "STANDARDS": "standards-reviewer", "QA": "qa"}
+
+IMPLEMENTER_PROMPTS = ("implement", "fix", "implement_full")
 
 # Ties in modification time: the one-off report, then run-pipeline's per-agent file, then the run record.
 SOURCE_RANK = {"one-off": 2, "per-agent": 1, "record": 0}
@@ -62,9 +67,10 @@ def usage_of(path):
             "cache_read": u.get("cache_read_input_tokens") or 0, "output": u.get("output_tokens") or 0,
             "cost_usd": data.get("total_cost_usd"), "turns": data.get("num_turns") or 0}
 
-def run_agent(manifest, cfg, spec, agent_type, ident, label, prompt, out_path, final=False):
+def run_agent(manifest, cfg, spec, agent_type, ident, label, prompt, out_path, final=False, entity=None):
     """One `claude -p` run with the agent's JSON schema. Returns {"report", "status", "usage"} and never raises.
-    `final`: also write the end state in the ledger (the one-off commands; the pipeline's close-stage does it there)."""
+    `final`: also write the end state in the ledger (the one-off commands; the pipeline's close-stage does it there).
+    `entity`: the zone the hook judges it by, when it is not `ident` (the standards reviewer runs as REVIEW)."""
     schema = spec["schemas"].get(agent_type, spec["schemas"]["implementer"])
     # The prompt goes on stdin: on Windows a `claude.cmd` would pass it through cmd.exe, which cuts newlines.
     cmd = compat.resolve(shlex.split(os.environ.get("AGENTIC_CLAUDE", "claude"))) + [
@@ -72,8 +78,9 @@ def run_agent(manifest, cfg, spec, agent_type, ident, label, prompt, out_path, f
         "--json-schema", json.dumps(schema, separators=(",", ":")), "--permission-mode", "acceptEdits",
         "--strict-mcp-config", "--allowedTools", *pipeline_tools(manifest, agent_type),
         "Bash(python3 .claude/bin/agentic.py claim:*)"]
-    env = child_env(cfg, AGENTIC_WP=ident or "REVIEW", CLAUDE_PROJECT_DIR=str(ROOT))
-    tracked = agent_type not in READ_ONLY_AGENTS and ident in entities(manifest)
+    zone = entity or ident
+    env = child_env(cfg, AGENTIC_WP=zone or "REVIEW", CLAUDE_PROJECT_DIR=str(ROOT))
+    tracked = agent_type not in READ_ONLY_AGENTS and zone in entities(manifest)
     report, status = None, "NO REPORT"
     try:
         with open(out_path, "w", encoding="utf-8") as out, \
@@ -116,13 +123,14 @@ def write_briefs(manifest):
     return info
 
 def run_stage(manifest, label, jobs, expected):
-    """A one-off stage: snapshot, the agents of `jobs` ([(id, agent type, prompt)]) in parallel, ownership check."""
+    """A one-off stage: snapshot, the agents of `jobs` ([(id, agent type, prompt[, entity])]) in parallel, ownership
+    check. The id names the report, the summary line and the ledger entry; the entity (default: the id) is the zone."""
     cfg, spec = load_config(), load_spec()
     (STATE / "runs").mkdir(parents=True, exist_ok=True)
     snapshot(label)
     runs = pipeline_module().threaded([
         (lambda j=j: run_agent(manifest, cfg, spec, j[1], j[0], j[0], j[2], STATE / "runs" / f"{j[0]}.json",
-                               final=True))
+                               final=True, entity=j[3] if len(j) > 3 else None))
         for j in jobs])
     finish(manifest, label, {j[0]: r["status"] for j, r in zip(jobs, runs)}, expected)
 
@@ -139,27 +147,41 @@ def finish(manifest, label, statuses, expected):
 
 def render_prompt(manifest, name, ident=None, **values):
     brief = f".claude/state/briefs/{ident}.md" if ident else ""
-    return pipeline_module().render(load_spec()["prompts"][name], wp=ident, brief=brief, rules=rules_hint(manifest),
-                                    **values)
+    spec = load_spec()
+    silent = name in IMPLEMENTER_PROMPTS and spec["constants"].get("implementer_rules") is False
+    rules = "" if silent else rules_text(manifest)
+    return pipeline_module().render(spec["prompts"][name], wp=ident, brief=brief, rules=rules, **values)
 
-def _report_items(report, kind, shared):
-    """The items of a review or QA report. In run-pipeline's per-agent files (shared: the test-auditor and the
-    verifier also write REVIEW-<n>) only a report with the reviewer's or QA's shape counts: their schemas require
-    needs_validation, the others' do not. REVIEW.json and QA.json are only written by run-review and run-qa."""
-    if not isinstance(report, dict) or (shared and "needs_validation" not in report):
+def _report_kind(report, kind, shared):
+    """The kind a report really is. In run-pipeline's per-agent files (shared: both reviewers, the test-auditor and
+    the verifier write REVIEW-<n>) the standards reviewer's says axis "standards", the reviewer's carries
+    needs_validation, and the others' are neither (None). STANDARDS.json, REVIEW.json and QA.json are one-off."""
+    if not isinstance(report, dict):
         return None
-    items = report.get(REPORT_KEYS[kind])
+    if not shared or kind == "QA":
+        return kind if (not shared or "needs_validation" in report) else None
+    if report.get("axis") == "standards":
+        return "STANDARDS"
+    return "REVIEW" if "needs_validation" in report else None
+
+def _report_items(report, kind):
+    items = report.get(REPORT_KEYS[kind]) if isinstance(report, dict) else None
     return items if isinstance(items, list) else None
 
 def _record_items(record, kind, include_all):
     """The items of the run record for one kind, or None when that part is missing (a run that stopped early)."""
-    part = record.get("review" if kind == "REVIEW" else "qa") if isinstance(record, dict) else None
+    part = record.get("qa" if kind == "QA" else "review") if isinstance(record, dict) else None
     if not isinstance(part, dict):
         return None
     if kind == "QA":
         items = part.get("defects")
         return items if isinstance(items, list) else None
-    # The verifier's refuted findings are in "refuted" and are never read.
+    axis = {"REVIEW": "spec", "STANDARDS": "standards"}[kind]
+    if isinstance(part.get(axis), dict):
+        part = part[axis]
+    elif kind == "STANDARDS":
+        return None
+    # The verifier's refuted findings are in "refuted" and are never read; waived ones are never fixed.
     items = list(part.get("confirmed") or [])
     return items + list(part.get("advisory") or []) if include_all else items
 
@@ -168,7 +190,7 @@ def latest_reports(include_all=False):
     the run record (workflow-result.json), run-pipeline's per-agent files (REVIEW-<n>.json, QA-<n>.json) and the
     one-off reports (REVIEW.json, QA.json). A kind with no source is absent; an unreadable file is skipped."""
     runs = STATE / "runs"
-    candidates = {"REVIEW": [], "QA": []}
+    candidates = {"REVIEW": [], "STANDARDS": [], "QA": []}
 
     def stamp(path):
         try:
@@ -189,25 +211,32 @@ def latest_reports(include_all=False):
     for path in sorted(runs.glob("*.json")) if runs.is_dir() else []:
         m = REPORT_FILE_RE.match(path.name)
         kind = m.group(1) if m else path.stem if path.stem in candidates else None
+        report = structured_report(path, {}) if kind else None
+        kind = _report_kind(report, kind, shared=bool(m)) if kind else None
         if kind is None:
             continue
-        items = _report_items(structured_report(path, {}), kind, shared=bool(m))
+        items = _report_items(report, kind)
         when = stamp(path)
         if items is not None and when is not None:
             candidates[kind].append((when, SOURCE_RANK["per-agent" if m else "one-off"], items, path.name))
     return {kind: (best[2], best[3]) for kind, found in candidates.items() if found
             for best in [max(found, key=lambda c: (c[0], c[1]))]}
 
-def fix_defects(spec, wp_id, include_all=False, reports=None):
-    """The implementation defects review and QA attribute to a WP, tagged with who found them. Blocking severities
-    only, unless include_all."""
+def fix_defects(spec, wp_id, include_all=False, reports=None, waivers=()):
+    """The implementation defects the reviewers and QA attribute to a WP, tagged with who found them. Only those
+    that block (by tier, or by severity for an item without one), unless include_all; never a waived one."""
     blocking, found = spec["constants"]["blocking"], []
     reports = latest_reports(include_all) if reports is None else reports
-    for kind, tag in (("REVIEW", "reviewer"), ("QA", "qa")):
+
+    def wanted(d):
+        if not isinstance(d, dict) or d.get("wp") != wp_id or d.get("kind", "implementation") != "implementation":
+            return False
+        if d.get("waiver") or waiver_for(d, waivers):
+            return False
+        return include_all or blocks(d, blocking, waivers)
+    for kind, tag in REPORT_TAGS.items():
         items = reports.get(kind, ([], None))[0]
-        found += [{"source": tag, **d} for d in items
-                  if isinstance(d, dict) and d.get("wp") == wp_id and (include_all or d.get("severity") in blocking)
-                  and d.get("kind", "implementation") == "implementation"]
+        found += [{"source": tag, **d} for d in items if wanted(d)]
     return found
 
 def run_wave(manifest, wave, only=None, fix=False, include_all=False):
@@ -224,7 +253,8 @@ def run_wave(manifest, wave, only=None, fix=False, include_all=False):
     if fix and not reports:
         die("--fix needs a review or QA report: .claude/state/runs/workflow-result.json, REVIEW-<n>.json / QA-<n>.json "
             "or REVIEW.json / QA.json. Run run-pipeline, run-review or run-qa first.")
-    defects = {wp["id"]: fix_defects(spec, wp["id"], include_all, reports) for wp in wave_wps} if fix else {}
+    waivers = manifest.get("waivers") or []
+    defects = {wp["id"]: fix_defects(spec, wp["id"], include_all, reports, waivers) for wp in wave_wps} if fix else {}
     origins = ", ".join(sorted({origin for _, origin in reports.values()}))
     for wp_id in [w for w, d in defects.items() if not d]:
         die(f"{wp_id}: no {'' if include_all else 'blocking '}defect from review or QA is attributed to it. "
@@ -253,7 +283,9 @@ def run_acceptance(manifest):
     run_stage(manifest, "acceptance", [("AT", "test-author", render_prompt(manifest, "test_author", "AT"))], "DONE")
 
 def run_review(manifest):
-    run_stage(manifest, "review", [("REVIEW", "reviewer", render_prompt(manifest, "reviewer"))], "PASS")
+    run_stage(manifest, "review", [("REVIEW", "reviewer", render_prompt(manifest, "reviewer", callers="", concerns="")),
+                                   ("STANDARDS", "standards-reviewer", render_prompt(manifest, "standards_reviewer"),
+                                    "REVIEW")], "PASS")
 
 def run_qa(manifest):
     run_stage(manifest, "qa", [("QA", "qa", render_prompt(manifest, "qa"))], "PASS")
@@ -320,7 +352,7 @@ def pipeline_tools(manifest, agent_type):
     bash = manifest.get("allow_bash", [])
     if agent_type in READ_ONLY_AGENTS:
         return ["Read", "Glob", "Grep"]
-    if agent_type == "reviewer":
+    if agent_type in ("reviewer", "standards-reviewer"):
         return REVIEW_TOOLS + bash
     if agent_type == "doc-updater":
         return BASE_TOOLS + ["Bash(git diff:*)", "Bash(git status:*)", "Bash(git log:*)"]
@@ -430,11 +462,14 @@ def architecture_type():
 def pipeline_plan(manifest):
     """The plan the engines follow, as one JSON line."""
     waves = sorted({wp["wave"] for wp in wps(manifest).values()})
+    printed = rules_text(manifest)
     plan = {"waves": waves, "acceptance": bool(at_entity(manifest)["command"]), "type": architecture_type(),
             "verify": sorted(manifest.get("verify", {})), "max_fix_cycles": int(load_config().get("max_fix_cycles", 2)),
             "agents": {wp["id"]: wp.get("agent", "implementer") for wp in wps(manifest).values()},
             "baseline": bool(manifest.get("verify")),
             "docs": bool(docs_entity(manifest)), "codemap": codemap_path(manifest), "rules": rule_files(manifest),
+            "rules_text": printed, "rules_sum": text_sum(printed), "waivers": manifest.get("waivers") or [],
+            "implementer_rules": load_spec()["constants"].get("implementer_rules") is not False,
             "wave_of": {wp["id"]: wp["wave"] for wp in wps(manifest).values()},
             "work_packages": {str(w): sorted(wp["id"] for wp in stage_owners(manifest, str(w))) for w in waves}}
     print(json.dumps(plan))

@@ -153,6 +153,19 @@ NOTES = {
         "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
         "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
     ],
+    "2.13.0": [
+        "The review has two axes, in parallel and never reranked: reviewer.md is now the Spec axis (contracts, "
+        "correctness, security, callers) and a new standards-reviewer.md the Standards axis (section 7 and the rules). "
+        "install adds the new agent; if you edited reviewer.md, merge the new one from .claude/state/upgrade/.",
+        "Every judge's finding carries a tier: floor never ships, reflex (a broken written rule) blocks unless the "
+        "plan's waivers cover it, finish never blocks. A finding without a tier keeps the meaning its severity had.",
+        "waivers in the manifest accept a reflex finding: {rule, scope, reason}, with the narrowest scope inside one "
+        "package's files and a reason naming who decided. validate checks them.",
+        "Section 4b of a plan gains a Source column: read rows cite file:line and validate and pipeline-plan check "
+        "them; inferred rows are challenged first by the plan-reviewer. A plan without the column gets a warning.",
+        "The rules are printed into the agents' prompts instead of their paths; if the text arrives damaged the run "
+        "falls back to the paths and says so (rules: pointed). The implementer keeps its standards in this version.",
+    ],
     "2.12.0": [
         "agentic.py doctor [--fix] lists what the flow left stale in a project, each finding with a severity: auto "
         "(--fix repairs it: a leftover .claude/state/guard/ folder, a retired permission), route (names the command "

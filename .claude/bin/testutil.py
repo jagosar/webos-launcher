@@ -83,7 +83,7 @@ if agent == "implementer" and os.environ.get("FAKE_WRITE"):
     write({"WP-01": "src/a.py", "WP-02": "src/b/x.py", "WP-03": "src/c.py"}[ident])
     if os.environ.get("FAKE_ROGUE") and ident == "WP-02":
         write("other.py")
-judges = ("qa", "reviewer", "test-auditor")
+judges = ("qa", "reviewer", "standards-reviewer", "test-auditor")
 values = {"status": os.environ.get("FAKE_STATUS", "PASS" if agent in judges else "DONE"), "wp": ident, "blocker": None,
           "coverage": [{"ac": "AC-001", "tests": ["t"]}], "concerns": [], "missing_context": None}
 if agent == "implementer" and os.environ.get("FAKE_CONCERNS"):
@@ -106,6 +106,8 @@ if first:
 if agent == "reviewer" and os.environ.get("FAKE_NEEDS_VALIDATION"):
     values["needs_validation"] = [{"wp": os.environ["FAKE_NEEDS_VALIDATION"], "file": "src/a.py", "kind": "external",
                                    "claim": "c", "fact": "a deployment setting", "how_to_check": "h"}]
+if agent == "standards-reviewer":
+    values["axis"] = "standards"
 if os.environ.get("FAKE_NOT_CHECKED"):
     values["not_checked"] = ["nothing else"]
 required = json.loads(argv[argv.index("--json-schema") + 1]).get("required", [])

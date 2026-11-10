@@ -35,6 +35,7 @@ INSTALL_GLOBS = [
     ".claude/bin/upgrade.py",
     ".claude/bin/doctor.py",
     ".claude/bin/plan_picture.py",
+    ".claude/bin/findings.py",
     ".claude/agents/*.md",
     ".claude/commands/*.md",
     ".claude/skills/*/SKILL.md",

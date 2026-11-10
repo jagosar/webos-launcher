@@ -81,7 +81,9 @@ from core import (  # noqa: E402
     load_manifest, locked_json, maintainer_mode, never_owned_problem, now_hm, refuse_by_hand_plan, root_drift, sibling,
     stage_of, status_to_state, stop, usage_records, with_claims,
 )
-from manifest_check import complexity_warnings, frontmatter_model, known_packs, require_valid, validate  # noqa: E402
+from manifest_check import (  # noqa: E402
+    complexity_warnings, frontmatter_model, known_packs, provenance_problems, require_valid, validate
+)
 from repo_scan import PATH_RE, callers, codemap, declared_stack, detect_stack, docs_check, rules_sync  # noqa: E402
 from verification import acceptance, attribute, baseline, quality, quality_files, run_command, verify  # noqa: E402
 from stage import STAGE_LABELS, check_stage, close_stage, open_stage, snapshot, stage_label  # noqa: E402
@@ -150,10 +152,19 @@ def cmd_stop(args):
     stop(args)
 
 
+def plan_provenance():
+    """The provenance of section 4b, checked before any agent runs: dies on an error, returns the warnings."""
+    errors, warnings = provenance_problems(ARCH.read_text(encoding="utf-8")) if ARCH.exists() else ([], [])
+    if errors:
+        die("Invalid manifest:\n  " + "\n  ".join(errors))
+    return warnings
+
+
 def cmd_validate(args):
     manifest = require_valid()
+    warnings = plan_provenance()
     print("Manifest valid.")
-    for warning in complexity_warnings(manifest):
+    for warning in complexity_warnings(manifest) + warnings:
         print(f"warning: {warning}")
 
 
@@ -164,7 +175,9 @@ def cmd_run_qa(args):
 def cmd_pipeline_plan(args):
     if args:
         die("Uso: pipeline-plan")
-    pipeline_plan(require_runnable())
+    manifest = require_runnable()
+    plan_provenance()
+    pipeline_plan(manifest)
 
 
 def cmd_quality(args):
