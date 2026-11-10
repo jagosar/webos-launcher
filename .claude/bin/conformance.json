@@ -484,17 +484,6 @@
       ]
     },
     {
-      "name": "language rules reach the agents",
-      "plan": {
-        "rules": [
-          ".claude/rules/agentic/common.md",
-          ".claude/rules/agentic/python.md"
-        ],
-        "docs": true,
-        "codemap": "docs/CODEMAP.md"
-      }
-    },
-    {
       "name": "the guardrail hook is not running",
       "gate_fail": [
         {
@@ -953,6 +942,177 @@
           "output": "not json"
         }
       ]
+    },
+    {
+      "name": "the two axes keep separate lists",
+      "review": [
+        {
+          "status": "FAIL",
+          "findings": [
+            {
+              "wp": "WP-01",
+              "file": "src/a.py",
+              "line": 3,
+              "problem": "SPEC-PROBLEM",
+              "evidence": "e",
+              "provenance": "read",
+              "tier": "floor",
+              "severity": "high"
+            }
+          ]
+        },
+        {
+          "status": "PASS",
+          "findings": []
+        }
+      ],
+      "standards": [
+        {
+          "status": "FAIL",
+          "axis": "standards",
+          "findings": [
+            {
+              "wp": "WP-02",
+              "file": "src/b/x.py",
+              "line": 3,
+              "problem": "STANDARDS-PROBLEM",
+              "evidence": "e",
+              "provenance": "read",
+              "tier": "reflex",
+              "rule": "No magic numbers"
+            }
+          ],
+          "not_checked": []
+        },
+        {
+          "status": "PASS",
+          "axis": "standards",
+          "findings": [],
+          "not_checked": []
+        }
+      ]
+    },
+    {
+      "name": "a reflex finding blocks until it is fixed",
+      "standards": [
+        {
+          "status": "FAIL",
+          "axis": "standards",
+          "findings": [
+            {
+              "wp": "WP-02",
+              "file": "src/b/x.py",
+              "line": 3,
+              "problem": "STANDARDS-PROBLEM",
+              "evidence": "e",
+              "provenance": "read",
+              "tier": "reflex",
+              "rule": "No magic numbers"
+            }
+          ],
+          "not_checked": []
+        },
+        {
+          "status": "PASS",
+          "axis": "standards",
+          "findings": [],
+          "not_checked": []
+        }
+      ]
+    },
+    {
+      "name": "a waived reflex finding does not block and is recorded",
+      "plan": {
+        "waivers": [
+          {
+            "rule": "magic numbers",
+            "scope": "src/b/",
+            "reason": "ana: tax table constants"
+          }
+        ]
+      },
+      "standards": [
+        {
+          "status": "FAIL",
+          "axis": "standards",
+          "findings": [
+            {
+              "wp": "WP-02",
+              "file": "src/b/x.py",
+              "line": 3,
+              "problem": "STANDARDS-PROBLEM",
+              "evidence": "e",
+              "provenance": "read",
+              "tier": "reflex",
+              "rule": "No magic numbers"
+            }
+          ],
+          "not_checked": []
+        }
+      ]
+    },
+    {
+      "name": "a finish finding never blocks",
+      "review": [
+        {
+          "status": "PASS",
+          "findings": [
+            {
+              "wp": "WP-01",
+              "file": "src/a.py",
+              "line": 3,
+              "problem": "p",
+              "evidence": "e",
+              "provenance": "read",
+              "tier": "finish",
+              "severity": "high"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "the standards reviewer returned no report",
+      "standards": [
+        null
+      ]
+    },
+    {
+      "name": "printed rules reach the agents",
+      "plan": {
+        "rules": [
+          ".claude/rules/agentic/common.md",
+          ".claude/rules/agentic/python.md"
+        ],
+        "rules_text": "\nRules you must follow (common and language). RULE-TEXT",
+        "rules_sum": 4823,
+        "docs": true,
+        "codemap": "docs/CODEMAP.md"
+      }
+    },
+    {
+      "name": "rules text that arrives damaged falls back to the paths",
+      "plan": {
+        "rules": [
+          ".claude/rules/agentic/common.md",
+          ".claude/rules/agentic/python.md"
+        ],
+        "rules_text": "\nRules you must follow (common and language). RULE-TEXT",
+        "rules_sum": 4824,
+        "docs": true,
+        "codemap": "docs/CODEMAP.md"
+      }
+    },
+    {
+      "name": "the implementer can be left without the rules",
+      "plan": {
+        "rules": [
+          ".claude/rules/agentic/common.md"
+        ],
+        "rules_text": "\nRules you must follow (common and language). RULE-TEXT",
+        "rules_sum": 4823,
+        "implementer_rules": false
+      }
     }
-]
+  ]
 }

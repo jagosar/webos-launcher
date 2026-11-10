@@ -32,6 +32,8 @@ The test-author wrote the acceptance tests and they are red. Red only proves tha
 - **critical / high:** a criterion that an empty or trivial implementation would satisfy, a test that cannot fail, or a wrong expected value (a test that a correct implementation fails). These make the test-author revise.
 - **medium / low:** weaker assertions that still catch a wrong implementation. They are reported, not blocking.
 
+Every finding also carries a `tier`: `floor` for critical and high (it blocks the tests until they are revised), `finish` for medium and low (it never blocks).
+
 # Report (final answer, under 300 words)
 
-JSON that follows the schema your launcher gives you: `status` (`FAIL` if there is any critical or high finding, else `PASS`) and `findings`, each with `severity`, `wp` (`AT`), `file`, `line`, `problem` (why the test is weak or wrong, naming its AC-NNN) and `evidence` (the trivial implementation that would pass it; for a wrong expected value, the literal in the test against the criterion's value); and `not_checked` (what you did not check, skipped, or see as a risk; `[]` when nothing).
+JSON that follows the schema your launcher gives you: `status` (`FAIL` if there is any critical or high finding, else `PASS`) and `findings`, each with `tier`, `severity`, `wp` (`AT`), `file`, `line`, `problem` (why the test is weak or wrong, naming its AC-NNN) and `evidence` (the trivial implementation that would pass it; for a wrong expected value, the literal in the test against the criterion's value); and `not_checked` (what you did not check, skipped, or see as a risk; `[]` when nothing).

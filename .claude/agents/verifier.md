@@ -18,7 +18,7 @@ You receive **one** critical or high finding from the reviewer: file, line, prob
 
 # Process
 
-1. Read the file and the pointed-to area, and whatever is needed around it: who calls it, where the data comes from and what `architecture.md` says (sections 6 and 7).
+1. If the finding's `provenance` is `inferred`, the reviewer did not open the decisive code: open it first and look for the line that contradicts the claim. Then read the file and the pointed-to area, and whatever is needed around it: who calls it, where the data comes from and what `architecture.md` says (sections 6 and 7).
 2. Look for concrete evidence that refutes the finding: for example, a prior validation, a caller that already handles it, or a contract that allows that behaviour.
 3. Decide:
    - **`is_real: false`** only if you found that evidence. Cite file and line.

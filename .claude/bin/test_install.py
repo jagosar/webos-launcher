@@ -288,5 +288,19 @@ class SettingsTests(InstallCase):
         self.assertNotIn("hook PermissionRequest", second.stdout)
 
 
+
+class ShippedModulesTests(unittest.TestCase):
+    """From test_acceptance_v212 (AC-007): every module of the flow beside agentic.py is installed in projects."""
+
+    def test_every_non_test_module_is_shipped(self):
+        import installer
+        bin_dir = Path(installer.__file__).resolve().parent
+        for module in sorted(bin_dir.glob("*.py")):
+            if module.name.startswith("test_") or module.name == "testutil.py":
+                continue
+            with self.subTest(module=module.name):
+                self.assertIn(f".claude/bin/{module.name}", installer.INSTALL_GLOBS)
+
+
 if __name__ == "__main__":
     unittest.main()

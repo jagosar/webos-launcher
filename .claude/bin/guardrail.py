@@ -61,7 +61,10 @@ QUOTED_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
 
 # What each of the flow's agent types may claim; an implementer (or a WP's own agent type) claims its packages.
 CLAIM_KINDS = {"qa": {"QA"}, "test-author": {"AT"}, "doc-updater": {"DOCS"}, "reviewer": {"REVIEW"},
-               "verifier": {"REVIEW"}, "test-auditor": {"REVIEW"}}
+               "standards-reviewer": {"REVIEW"}, "verifier": {"REVIEW"}, "test-auditor": {"REVIEW"}}
+
+# Claimed by several agents at once: the review entity owns no file, and both reviewers run in one stage.
+SHARED_CLAIMS = {"REVIEW"}
 
 HOOKS_DEAD_MSG = (
     "The guardrail hook (`agentic.py hook`) did not run for this call, so no guardrail of the flow is active in this "
@@ -97,7 +100,8 @@ def claim(agent_id, wanted, agent_type=None):
 
     def update(claims):
         current = claims.get(agent_id)
-        holder = next((a for a, w in claims.items() if w == wanted and a != agent_id), None)
+        others = [a for a, w in claims.items() if w == wanted and a != agent_id]
+        holder = None if wanted in SHARED_CLAIMS or not others else others[0]
         if current and current != wanted:
             conflict["msg"] = f"this agent already claimed {current}; it cannot also claim {wanted}."
         elif holder:
@@ -118,7 +122,7 @@ def claim(agent_id, wanted, agent_type=None):
 def claim_required_types():
     """The flow's agents with a zone of their own, including those a WP declares in "agent": without a claim, they
     do not write."""
-    types = {"implementer", "qa", "test-author", "reviewer", "doc-updater"}
+    types = {"implementer", "qa", "test-author", "reviewer", "standards-reviewer", "doc-updater"}
     try:
         types |= {wp["agent"] for wp in wps(load_manifest()).values() if isinstance(wp.get("agent"), str)}
     except ManifestError:

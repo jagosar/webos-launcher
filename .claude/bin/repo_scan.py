@@ -62,6 +62,22 @@ def rule_files(manifest):
     names = ["common"] + [p for p in packs if isinstance(p, str)]
     return [f".claude/rules/agentic/{n}.md" for n in names if (RULES_DIR / f"{n}.md").exists()]
 
+def render_rules(paths, root):
+    """The rules' text for a prompt: each file without its frontmatter, under a header naming it."""
+    if not paths:
+        return ""
+    parts = ["\nRules you must follow (common and language). They are printed here, so do not read them from disk:\n"]
+    for rel in paths:
+        text = (Path(root) / rel).read_text(encoding="utf-8")
+        if text.startswith("---"):
+            end = text.find("\n---", 3)
+            text = text[end + 4:] if end != -1 else text
+        parts.append(f"\n--- {rel} ---\n{text.strip()}\n")
+    return "".join(parts)
+
+def rules_text(manifest):
+    return render_rules(rule_files(manifest), ROOT)
+
 def rules_hint(manifest):
     files = rule_files(manifest)
     return f" Rules you must follow (language and common): {', '.join(files)}." if files else ""

@@ -21,7 +21,7 @@ You do not work alone: other implementers write in this same repo at the same ti
 3. **Exact contracts.** Implement the signatures of section 6 to the letter: names, types, parameter order and errors. Section 8 says how you consume each contract:
    - **By implementation** (WPs of earlier waves, in `depends_on`): the code is already in the repo. Use it. If it does not match the signature, do not adapt it: return `BLOCKED`.
    - **By signature** (WPs of your own wave): their code may not exist yet. Program against the signature in section 6 and, in your tests, use test doubles that respect that signature, defined inside your own files. Do not wait for the other WP to finish and do not import its module in your tests.
-4. **Conventions.** Follow section 7, the style of the existing code and the rules your prompt points to (`.claude/rules/agentic/`: the common ones and your language's). If they clash, this order wins: `architecture.md`, the existing code, and finally the rules.
+4. **Conventions.** Follow section 7, the style of the existing code and the rules printed in your prompt (if it names files instead, read them). If they clash, this order wins: `architecture.md`, the existing code, and finally the rules.
 5. **No new dependencies** except those in section 3.
 6. **No git.** Do not commit, push or switch branches.
 

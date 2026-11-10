@@ -21,6 +21,7 @@ async function simulate(scenario = {}, args = {}) {
   const executed = []
   let gateCalls = 0
   let reviewRound = 0
+  let standardsRound = 0
   let qaRound = 0
   let auditRound = 0
   const implCalls = {}
@@ -76,6 +77,10 @@ async function simulate(scenario = {}, args = {}) {
         reviewRound += 1
         const r = scenario.review ? scenario.review(reviewRound) : { status: 'PASS', findings: [] }
         return scenario.reports && scenario.reports.reviewer ? { ...r, ...scenario.reports.reviewer } : r
+      }
+      case 'standards-reviewer': {
+        standardsRound += 1
+        return scenario.standards ? scenario.standards(standardsRound) : { status: 'PASS', axis: 'standards', findings: [], not_checked: [] }
       }
       case 'verifier':
         return scenario.verifier || { is_real: true, confidence: 0.9, reasoning: 'it holds' }
@@ -290,7 +295,7 @@ test('absolute paths in the doc-updater report: count as changed', async () => {
 test('language rules: reach the agents that write or judge code', async () => {
   const rules = ['.claude/rules/agentic/common.md', '.claude/rules/agentic/python.md']
   const { calls } = await simulate({ plan: { ...DOCS_PLAN, rules } })
-  for (const type of ['test-author', 'test-auditor', 'implementer', 'reviewer', 'qa', 'doc-updater']) {
+  for (const type of ['test-author', 'test-auditor', 'implementer', 'reviewer', 'standards-reviewer', 'qa', 'doc-updater']) {
     const call = calls.find(c => c.type === type)
     assert.ok(call.prompt.includes(rules.join(', ')), `${type} does not receive the rules`)
   }
@@ -470,11 +475,19 @@ function fromDecl(d) {
     testAuthor: d.test_author,
     audit: d.audit ? round => pickRound(d.audit, round) : undefined,
     review: d.review ? round => pickRound(d.review, round) : undefined,
+    standards: d.standards ? round => pickRound(d.standards, round) : undefined,
     qa: d.qa ? round => pickRound(d.qa, round) : undefined,
     verifier: d.verifier,
     docs: d.docs,
     reports: d.reports,
   }
+}
+// Counts of the last review, per axis: spec [confirmed, refuted, advisory], standards [..., waived].
+const reviewAxes = review => {
+  if (!review) return null
+  const spec = review.spec || {}
+  const std = review.standards || {}
+  return { spec: ['confirmed', 'refuted', 'advisory'].map(k => (spec[k] || []).length), standards: ['confirmed', 'refuted', 'advisory', 'waived'].map(k => (std[k] || []).length) }
 }
 const summarize = ({ result, calls, gates, gateCalls }) => {
   const seen = {}
@@ -493,6 +506,7 @@ const summarize = ({ result, calls, gates, gateCalls }) => {
     gate_denials: result.gate_denials || {},
     review_callers: (result.review && result.review.callers) || 0,
     verification_failures: (result.verification_failures || []).length,
+    review_axes: reviewAxes(result.review), rules: result.rules ?? null,
   }
 }
 if (process.argv.includes('--dump')) {
@@ -505,7 +519,7 @@ if (process.argv.includes('--dump')) {
 
 test('the schemas of the workflow are the ones in pipeline-spec.json', async () => {
   const { schemas } = await simulate({ plan: { docs: true, codemap: 'docs/CODEMAP.md' } })
-  for (const type of ['gatekeeper', 'test-author', 'test-auditor', 'implementer', 'reviewer', 'verifier', 'qa', 'doc-updater']) {
+  for (const type of ['gatekeeper', 'test-author', 'test-auditor', 'implementer', 'reviewer', 'standards-reviewer', 'verifier', 'qa', 'doc-updater']) {
     // the verifier only runs with a serious finding
     if (type === 'verifier') continue
     assert.deepEqual(schemas[type], spec.schemas[type], `${type}: the schema drifted from pipeline-spec.json`)

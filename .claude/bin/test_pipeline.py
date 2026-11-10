@@ -27,7 +27,8 @@ SPEC = json.loads((WORKFLOWS / "pipeline-spec.json").read_text(encoding="utf-8")
 
 def world(decl):
     """The simulated world of one scenario: the same defaults and overrides that test_workflow.mjs builds."""
-    state = {"gate_calls": 0, "gates": [], "calls": [], "verifies": 0, "reviews": 0, "qas": 0, "audits": 0}
+    state = {"gate_calls": 0, "gates": [], "calls": [], "verifies": 0, "reviews": 0, "standards": 0, "qas": 0,
+             "audits": 0}
     base = CONFORMANCE["plan"]
 
     def text(o):
@@ -99,6 +100,10 @@ def world(decl):
         if agent_type == "reviewer":
             state["reviews"] += 1
             return override(pick(decl["review"], state["reviews"]) if decl.get("review") else {"status": "PASS", "findings": []}, "reviewer")
+        if agent_type == "standards-reviewer":
+            state["standards"] += 1
+            default = {"status": "PASS", "axis": "standards", "findings": [], "not_checked": []}
+            return pick(decl["standards"], state["standards"]) if decl.get("standards") else default
         if agent_type == "verifier":
             return decl.get("verifier") or {"is_real": True, "confidence": 0.9, "reasoning": "it holds"}
         if agent_type == "qa":
@@ -126,7 +131,17 @@ def summarize(result, state):
             "not_checked": sorted(f"{e['agent']}:{e['label']}" for e in result.get("not_checked", [])),
             "gate_denials": result.get("gate_denials", {}),
             "review_callers": (result.get("review") or {}).get("callers", 0),
+            "review_axes": review_axes(result.get("review")), "rules": result.get("rules"),
             "verification_failures": len(result.get("verification_failures") or [])}
+
+
+def review_axes(review):
+    """Counts of the last review, per axis: spec [confirmed, refuted, advisory], standards [... , waived]."""
+    if not review:
+        return None
+    spec, std = review.get("spec") or {}, review.get("standards") or {}
+    return {"spec": [len(spec.get(k) or []) for k in ("confirmed", "refuted", "advisory")],
+            "standards": [len(std.get(k) or []) for k in ("confirmed", "refuted", "advisory", "waived")]}
 
 
 def run_scenario(decl):
@@ -151,7 +166,9 @@ class ConformanceTests(unittest.TestCase):
         for decl in CONFORMANCE["scenarios"]:
             with self.subTest(scenario=decl["name"]):
                 mine, theirs = run_scenario(decl), self.workflow[decl["name"]]
-                for key in ("result", "failed_stage", "detail", "fix_cycles", "pending", "gates", "gate_calls", "agents", "not_checked", "gate_denials", "review_callers", "verification_failures"):
+                keys = ("result", "failed_stage", "detail", "fix_cycles", "pending", "gates", "gate_calls", "agents",
+                        "not_checked", "gate_denials", "review_callers", "verification_failures", "review_axes", "rules")
+                for key in keys:
                     self.assertEqual(mine[key], theirs[key], key)
                 self.assertEqual(mine["prompts"], theirs["prompts"], "the agents must receive the same prompts")
 
@@ -386,7 +403,9 @@ class RunPipelineEndToEndTests(unittest.TestCase):
         self.assertEqual(order[0], "test-author")
         self.assertEqual(order[1], "test-auditor")
         self.assertEqual(sorted(order[2:4]), ["implementer", "implementer"])
-        self.assertEqual(order[4:], ["implementer", "reviewer", "qa"], "wave 2, then the judges")
+        self.assertEqual(order[4], "implementer", "wave 2")
+        self.assertEqual(sorted(order[5:7]), ["reviewer", "standards-reviewer"], "both reviewers, in parallel")
+        self.assertEqual(order[7:], ["qa"])
         state = json.loads((self.repo.dir / ".claude/state/pipeline.json").read_text(encoding="utf-8"))
         self.assertEqual(state["completed_waves"], [1, 2])
         ledger = json.loads((self.repo.dir / ".claude/state/ledger.json").read_text(encoding="utf-8"))

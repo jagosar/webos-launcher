@@ -2,6 +2,7 @@
 
 Run: python3 -m unittest discover -s .claude/bin -p "test_plan_picture.py"
 """
+import json
 import re
 import sys
 import unittest
@@ -9,6 +10,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import plan_picture  # noqa: E402
+from test_agentic import MANIFEST, Repo  # noqa: E402
+
+
+def last_json(text):
+    return json.loads([line for line in text.splitlines() if line.startswith("{")][-1])
 
 
 def wp(ident, wave, depends_on=(), files=("src/x.py",), acs=()):
@@ -56,6 +62,38 @@ class RenderTests(unittest.TestCase):
         self.assertFalse(re.search(r'(?:x|y|x1|y1|x2|y2|width|height)="\d+\.\d', page))
         self.assertNotIn("<script", page)
         self.assertNotIn("http", page)
+
+
+class CommandTests(unittest.TestCase):
+    """From test_acceptance_v212 (design 0019, AC-005): the command writes the page, the same way every time."""
+
+    def test_the_command_draws_the_manifest_and_refuses_an_invalid_one(self):
+        manifest = dict(MANIFEST, work_packages=[
+            {"id": "WP-01", "wave": 1, "depends_on": [], "files": ["src/a.py"], "acs": ["AC-001"]},
+            {"id": "WP-02", "wave": 1, "depends_on": [], "files": ["src/<b>.py"], "acs": ["AC-002"]},
+            {"id": "WP-03", "wave": 2, "depends_on": ["WP-01"], "files": ["src/c.py"], "acs": ["AC-003"]}])
+        repo = Repo(manifest)
+        self.addCleanup(repo.cleanup)
+        r = repo.run("plan-picture")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(last_json(r.stdout), {"path": ".claude/state/plan.html", "packages": 3, "waves": 2})
+        page = (repo.dir / ".claude/state/plan.html").read_bytes()
+        self.assertEqual(repo.run("plan-picture").returncode, 0)
+        self.assertEqual((repo.dir / ".claude/state/plan.html").read_bytes(), page, "deterministic")
+        html = page.decode("utf-8")
+        self.assertEqual(html.count("<svg"), 1)
+        for wp in ("WP-01", "WP-02", "WP-03"):
+            self.assertIn(f'<g id="wp-{wp}"', html)
+            self.assertIn(f"<td>{wp}</td>", html)
+        self.assertEqual(html.count('<line class="dep" data-from="WP-01" data-to="WP-03"'), 1)
+        self.assertEqual(html.count('<line class="dep"'), 1)
+        self.assertIn("src/&lt;b&gt;.py", html)
+        self.assertNotIn("<script", html)
+        self.assertNotIn("http", html)
+        bad = Repo(dict(MANIFEST, work_packages=[{"id": "WP-01", "wave": 1, "files": ["architecture.md"]}]))
+        self.addCleanup(bad.cleanup)
+        self.assertEqual(bad.run("plan-picture").returncode, 1)
+        self.assertFalse((bad.dir / ".claude/state/plan.html").exists())
 
 
 if __name__ == "__main__":

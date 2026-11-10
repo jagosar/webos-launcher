@@ -6,7 +6,8 @@
       "high"
     ],
     "refute_confidence": 0.7,
-    "audit_rounds": 2
+    "audit_rounds": 2,
+    "implementer_rules": true
   },
   "prompts": {
     "implement": "Implement {wp}. Your brief is {brief}: the parts of architecture.md your package needs.{rules}",
@@ -19,7 +20,8 @@
     "verifier": "Try to refute this finding from the reviewer, as JSON:\n{finding}",
     "qa": "Run the system's QA validation according to architecture.md.{rules}",
     "doc_updater": "Update the documentation according to architecture.md and the integrated code.{rules}",
-    "implement_full": "Implement {wp}. Your first attempt returned NEEDS_CONTEXT: {missing}. This time your brief is architecture.md, whole: read it and implement. If the document does not settle it, return BLOCKED with the section that should.{rules}"
+    "implement_full": "Implement {wp}. Your first attempt returned NEEDS_CONTEXT: {missing}. This time your brief is architecture.md, whole: read it and implement. If the document does not settle it, return BLOCKED with the section that should.{rules}",
+    "standards_reviewer": "Review the integrated code against section 7 of architecture.md and the rules below. Report only breaches of a written rule: name it in \"rule\".{rules}"
   },
   "schemas": {
     "gatekeeper": {
@@ -108,6 +110,7 @@
           "items": {
             "type": "object",
             "required": [
+              "tier",
               "severity",
               "wp",
               "file",
@@ -115,6 +118,13 @@
               "evidence"
             ],
             "properties": {
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "floor",
+                  "finish"
+                ]
+              },
               "severity": {
                 "type": "string",
                 "enum": [
@@ -287,7 +297,9 @@
           "items": {
             "type": "object",
             "required": [
+              "tier",
               "severity",
+              "provenance",
               "wp",
               "file",
               "problem",
@@ -296,6 +308,13 @@
               "if_skipped"
             ],
             "properties": {
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "floor",
+                  "finish"
+                ]
+              },
               "severity": {
                 "type": "string",
                 "enum": [
@@ -325,6 +344,13 @@
               },
               "if_skipped": {
                 "type": "string"
+              },
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "read",
+                  "inferred"
+                ]
               }
             }
           }
@@ -374,6 +400,93 @@
                 "type": "string"
               }
             }
+          }
+        }
+      }
+    },
+    "standards-reviewer": {
+      "type": "object",
+      "required": [
+        "status",
+        "axis",
+        "findings",
+        "not_checked"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "PASS",
+            "FAIL"
+          ]
+        },
+        "axis": {
+          "type": "string",
+          "enum": [
+            "standards"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "tier",
+              "rule",
+              "provenance",
+              "wp",
+              "file",
+              "problem",
+              "evidence",
+              "fix",
+              "if_skipped"
+            ],
+            "properties": {
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "reflex",
+                  "finish"
+                ]
+              },
+              "rule": {
+                "type": "string"
+              },
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "read",
+                  "inferred"
+                ]
+              },
+              "wp": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer"
+              },
+              "problem": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "string"
+              },
+              "fix": {
+                "type": "string"
+              },
+              "if_skipped": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "not_checked": {
+          "type": "array",
+          "items": {
+            "type": "string"
           }
         }
       }
@@ -428,6 +541,7 @@
           "items": {
             "type": "object",
             "required": [
+              "tier",
               "id",
               "severity",
               "wp",
@@ -438,6 +552,13 @@
               "if_skipped"
             ],
             "properties": {
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "floor",
+                  "finish"
+                ]
+              },
               "id": {
                 "type": "string"
               },
