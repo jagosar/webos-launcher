@@ -145,6 +145,28 @@ const QA_SCHEMA = {
     needs_validation: NEEDS_VALIDATION,
   },
 }
+// A re-review: one verdict per fingerprint it was given; anything new is recorded and never reopens the fix.
+const TEXT = { type: 'string' }
+const VERDICT_ITEM = {
+  type: 'object',
+  required: ['fingerprint', 'verdict', 'evidence'],
+  properties: { fingerprint: TEXT, verdict: { type: 'string', enum: ['ADDRESSED', 'NOT_ADDRESSED'] }, evidence: TEXT },
+}
+const NEW_FINDING = {
+  type: 'object',
+  required: ['tier', 'wp', 'file', 'problem', 'evidence'],
+  properties: { tier: { type: 'string', enum: ['floor', 'reflex', 'finish'] }, wp: TEXT, file: TEXT, problem: TEXT, evidence: TEXT },
+}
+const RE_REVIEW_SCHEMA = {
+  type: 'object',
+  required: ['status', 'verdicts', 'new_findings', 'not_checked'],
+  properties: {
+    status: { type: 'string', enum: ['PASS', 'FAIL'] },
+    verdicts: { type: 'array', items: VERDICT_ITEM },
+    new_findings: { type: 'array', items: NEW_FINDING },
+    not_checked: NOT_CHECKED,
+  },
+}
 const DOCS_SCHEMA = {
   type: 'object',
   required: ['status', 'files', 'changes', 'unverified', 'blocker'],
@@ -202,6 +224,26 @@ const textSum = text => {
   for (const ch of text) sum = (sum + ch.codePointAt(0)) % 1000000007
   return sum
 }
+// findings.py's fingerprint: FNV-1a (32-bit) over the code points of axis|tier|rule|file|problem, the problem trimmed,
+// lowered and cut to 80 code points; the line and the evidence change between reviews and are left out.
+const fingerprint = f => {
+  const part = k => (f[k] === undefined || f[k] === null ? '' : String(f[k]))
+  const trimmed = part('problem').replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '').toLowerCase()
+  const problem = Array.from(trimmed).slice(0, 80).join('')
+  const text = [part('axis'), part('tier'), part('rule'), part('file'), problem].join('|')
+  let h = 2166136261
+  for (const ch of text) h = Math.imul(h ^ ch.codePointAt(0), 16777619) >>> 0
+  return 'F' + h.toString(16).padStart(8, '0')
+}
+// Copies with "fingerprint"; the second and later of a repeated value get "-2", "-3".
+const withFingerprints = findings => {
+  const seen = {}
+  return findings.map(f => {
+    const fp = fingerprint(f)
+    seen[fp] = (seen[fp] || 0) + 1
+    return { ...f, fingerprint: seen[fp] === 1 ? fp : `${fp}-${seen[fp]}` }
+  })
+}
 // Each agent reads the slice of architecture.md that `agentic.py briefs` wrote for it, not the whole document.
 const brief = id => `.claude/state/briefs/${id}.md`
 const REFUTE_CONFIDENCE = 0.7
@@ -222,10 +264,13 @@ const unchangedClaims = (report, out, id) => {
     ? report.files.filter(f => !seen.some(s => f === s || f.endsWith('/' + s)))
     : []
 }
-const run = { result: 'REVIEW', stages: [], baseline: null, work_packages: {}, verification: null, review: null, qa: null, test_audit: null, docs: null, fix_cycles: 0, pending: [], not_checked: [], gate_denials: {}, verification_failures: [] }
+const run = { result: 'REVIEW', stages: [], baseline: null, work_packages: {}, verification: null, review: null, qa: null, test_audit: null, docs: null, fix_cycles: 0, pending: [], not_checked: [], gate_denials: {}, verification_failures: [], agent_calls: 0 }
 // Every report says what it did not check; the run keeps them per call, fix calls and revisions included.
+// `model` goes to agent() only when set (the escalated fix attempt). Every call counts, a failed one too.
 const report = async (prompt, opts) => {
-  const r = await safe(agent(prompt, opts), opts.label)
+  const { model, ...rest } = opts
+  run.agent_calls += 1
+  const r = await safe(agent(prompt, model ? opts : rest), opts.label)
   if (r && Array.isArray(r.not_checked) && r.not_checked.length) run.not_checked.push({ agent: opts.agentType, label: opts.label, items: r.not_checked })
   return r
 }
@@ -260,6 +305,14 @@ const fixCount = {}
 const fixHistory = {}
 const limitPending = []
 let qaPending = []  // the last QA's design and no-WP items: they stay listed whatever comes after
+const newPending = []  // what a re-review found that was not open: listed, never fixed in this run
+const pendingNow = () => [...qaPending, ...limitPending, ...concernPending, ...newPending]
+// The review after the first full one is scoped: the confirmed findings of the packages fixed since then.
+const AXES = ['spec', 'standards']
+let reviewed = false
+let fixedSinceReview = new Set()
+let fixCountAtReview = {}
+let lastConfirmed = { spec: [], standards: [] }
 // A package's own key: plan.wave_of comes from JSON, so a name like "constructor" must not read as a package.
 const isWp = wp => Object.prototype.hasOwnProperty.call(plan.wave_of, wp)
 const pendingKey = d => [d.wp, d.source, d.file, d.problem || d.repro].join('|')
@@ -345,7 +398,13 @@ async function launchWave(wave, wpIds, defectsByWp) {
           'If you try something different, say in internal_decisions how it differs and why it should work.'
       }
     }
-    return report(prompt + IMPLEMENTER_RULES, { agentType: plan.agents[wp] || 'implementer', label: defectsByWp ? `${wp} (fix)` : wp, schema: REPORT_SCHEMA })
+    // The last allowed fix attempt (2 or later) runs on the escalation model; the prompt is the same.
+    const attempt = (fixCount[wp] || 0) + 1
+    const last = defectsByWp && attempt >= 2 && attempt === plan.max_fix_cycles
+    const model = last && plan.escalation_model ? plan.escalation_model : null
+    const label = defectsByWp ? `${wp} (fix)` : wp
+    const agentType = plan.agents[wp] || 'implementer'
+    return report(prompt + IMPLEMENTER_RULES, { agentType, label, schema: REPORT_SCHEMA, model })
   }))
   const withContext = await withWholeDocument(wpIds, reports, !!defectsByWp)
   wpIds.forEach((wp, i) => {
@@ -415,6 +474,8 @@ async function runWaves(waves, byWave, defectsByWp, opened) {
 
 // One fix cycle for the given defects (already filtered by the per-package limit). `opened`: the first fix wave is open.
 async function fixCycle(defects, opened) {
+  const short = budgetForCycle(defects)
+  if (short) return { stopped: short }
   run.fix_cycles += 1
   phase('Fixes')
   const by = groupByWp(defects)
@@ -426,7 +487,35 @@ async function fixCycle(defects, opened) {
   for (const w of waves) byWave[w] = Object.keys(by).filter(wp => plan.wave_of[wp] === w).sort()
   const out = await runWaves(waves, byWave, by, opened)
   for (const wp of Object.keys(by)) fixCount[wp] = (fixCount[wp] || 0) + 1
+  for (const wp of Object.keys(by)) fixedSinceReview.add(wp)
   return out
+}
+
+// ---------- the budget, in model agent calls ----------
+// A stop when the budget cannot pay for wave 0, every package once, both reviewers, QA and the docs.
+const budgetAtStart = () => {
+  const most = plan.max_agent_calls
+  if (most === null || most === undefined) return null
+  const wave0 = startWave === null && plan.acceptance && plan.type !== 'refactor' ? 2 : 0
+  const packages = Object.entries(plan.work_packages).filter(([w]) => startWave === null || Number(w) >= startWave)
+    .reduce((n, [, wps]) => n + wps.length, 0)
+  const minimum = wave0 + packages + 2 + 1 + (plan.docs ? 1 : 0)
+  if (minimum <= most) return null
+  return stop('budget', `the budget of ${most} agent calls cannot fund the run: it needs at least ${minimum}`)
+}
+// A stop, with the cycle's defects in pending, when the cycle and the review and QA after it do not fit.
+const budgetForCycle = defects => {
+  const most = plan.max_agent_calls
+  if (most === null || most === undefined) return null
+  const packages = Object.keys(groupByWp(defects))
+  const scope = new Set([...packages, ...fixedSinceReview])
+  const reviewers = !reviewed ? AXES.length : AXES.filter(axis => lastConfirmed[axis].some(f => scope.has(f.wp))).length
+  const needed = packages.length + reviewers + 1 + (plan.docs ? 1 : 0)
+  const left = most - run.agent_calls
+  if (needed <= left) return null
+  run.pending = [...run.pending, ...defects.map(d => ({ type: 'over budget', ...d }))]
+  return stop('budget', `the budget of ${most} agent calls cannot fund another fix cycle and the review and QA ` +
+    `after it: ${needed} needed, ${left} left`)
 }
 
 // ---------- Prepare + Baseline ----------
@@ -452,7 +541,7 @@ const IMPLEMENTER_RULES = plan.implementer_rules === false ? '' : RULES
 const WAIVERS = Array.isArray(plan.waivers) ? plan.waivers : []
 const REVIEW_SOURCES = { spec: 'reviewer', standards: 'standards-reviewer' }
 // Both reviewers in parallel, one verifier per finding that blocks, the record per axis (never reranked).
-const reviewStage = async post => {
+const fullReview = async post => {
   phase('Review')
   const concerns = concernPending.length
     ? `\nThe implementers finished with these concerns about their own code, as JSON:\n${JSON.stringify(concernPending.map(c => ({ wp: c.wp, problem: c.problem })))}\nCheck each one: confirm it as a finding with its severity, or leave it out if the code is right.`
@@ -470,10 +559,9 @@ const reviewStage = async post => {
   ])
   if (!specR) return { stopped: stop('review', 'the reviewer returned no report') }
   if (!stdR) return { stopped: stop('review', 'the standards reviewer returned no report') }
-  const axes = {
-    spec: specR.findings.map(f => ({ ...f, axis: 'spec' })),
-    standards: stdR.findings.map(f => ({ ...f, axis: 'standards' })),
-  }
+  const marked = withFingerprints([...specR.findings.map(f => ({ ...f, axis: 'spec' })),
+    ...stdR.findings.map(f => ({ ...f, axis: 'standards' }))])
+  const axes = { spec: marked.slice(0, specR.findings.length), standards: marked.slice(specR.findings.length) }
   const waived = axes.standards.filter(f => waiverFor(f, WAIVERS))
     .map(f => ({ ...f, waiver: waiverFor(f, WAIVERS).reason }))
   const graves = [...axes.spec, ...axes.standards].filter(f => blocks(f, WAIVERS))
@@ -494,18 +582,84 @@ const reviewStage = async post => {
   record.standards.waived = waived
   const union = k => [...record.spec[k], ...record.standards[k]]
   run.review = {
-    ...record, confirmed: union('confirmed'), refuted: union('refuted'), advisory: union('advisory'), waived,
+    scoped: false, ...record, confirmed: union('confirmed'), refuted: union('refuted'), advisory: union('advisory'),
+    waived,
     opened: ok(post[1]), callers: callerItems.length,
   }
   needsReview = (specR.needs_validation || []).map(i => needsItem('reviewer', i))
-  // The reviewers are read-only: if closing their stage finds changes, someone wrote where nobody may.
-  const closeReview = `close-stage review REVIEW=${run.review.confirmed.length ? 'fail' : 'pass'}`
-  const afterReview = await seq([closeReview, 'open-stage qa'], 'close-stage review')
+  return closeReview({ spec: record.spec.confirmed, standards: record.standards.confirmed })
+}
+// Each axis re-reviews its open findings (the previous review's confirmed ones of the packages fixed since) against
+// the fixes' diffs, by fingerprint, without verifiers. A missing verdict is NOT_ADDRESSED; what is new goes to pending
+// and never starts a fix cycle.
+const AXIS_NAMES = { spec: 'Spec', standards: 'Standards' }
+const NO_RE_REVIEW = {
+  spec: 'the reviewer returned no re-review report',
+  standards: 'the standards reviewer returned no re-review report',
+}
+const reReviewStage = async post => {
+  phase('Review')
+  const scope = fixedSinceReview
+  const open = {}
+  for (const axis of AXES) open[axis] = lastConfirmed[axis].filter(f => scope.has(f.wp))
+  const diffs = [...scope].sort().flatMap(wp => {
+    const out = []
+    for (let n = (fixCountAtReview[wp] || 0) + 1; n <= (fixCount[wp] || 0); n += 1) {
+      out.push(`.claude/state/runs/${wp}.fix-${n}.diff`)
+    }
+    return out
+  }).join(', ')
+  const asked = AXES.filter(axis => open[axis].length)
+  const answers = await parallel(asked.map(axis => () => report(
+    `Re-review the fix, on the ${AXIS_NAMES[axis]} axis only. ` +
+    'These findings were confirmed before the fix, each with its fingerprint, as JSON:\n' +
+    `${JSON.stringify(open[axis])}\n` +
+    `The fix's diffs are ${diffs}: read them and the code they changed. ` +
+    'For each fingerprint say ADDRESSED or NOT_ADDRESSED, with the line that shows it. ' +
+    'Report anything new in new_findings: it is recorded and does not block this run.' + RULES,
+    { agentType: REVIEW_SOURCES[axis], label: `${REVIEW_SOURCES[axis]} (re-review)`, schema: RE_REVIEW_SCHEMA })))
+  const reports = {}
+  asked.forEach((axis, i) => { reports[axis] = answers[i] })
+  for (const axis of asked) if (!reports[axis]) return { stopped: stop('review', NO_RE_REVIEW[axis]) }
+  const record = {}
+  const found = []
+  for (const axis of AXES) {
+    const rep = reports[axis] || {}
+    const said = {}
+    for (const v of rep.verdicts || []) if (v && typeof v === 'object') said[v.fingerprint] = v.verdict
+    const addressed = open[axis].filter(f => said[f.fingerprint] === 'ADDRESSED')
+    const confirmed = lastConfirmed[axis].filter(f => !addressed.includes(f))
+    record[axis] = { confirmed, refuted: [], advisory: [], addressed }
+    for (const f of rep.new_findings || []) if (f && typeof f === 'object') found.push({ ...f, axis })
+  }
+  record.standards.waived = []
+  for (const f of found) {
+    const item = { type: 'new finding', source: REVIEW_SOURCES[f.axis], ...f }
+    if (!newPending.some(p => pendingKey(p) === pendingKey(item))) newPending.push(item)
+  }
+  const union = k => [...record.spec[k], ...record.standards[k]]
+  run.review = {
+    scoped: true, ...record, confirmed: union('confirmed'), refuted: [], advisory: [], waived: [], new: found,
+    opened: ok(post[1]), callers: 0,
+  }
+  return closeReview({ spec: record.spec.confirmed, standards: record.standards.confirmed })
+}
+// What the next review starts from: these confirmed findings, and no package fixed since. The reviewers are
+// read-only: if closing their stage finds changes, someone wrote where nobody may.
+const closeReview = async byAxis => {
+  const confirmed = [...byAxis.spec, ...byAxis.standards]
+  reviewed = true
+  lastConfirmed = byAxis
+  fixedSinceReview = new Set()
+  fixCountAtReview = { ...fixCount }
+  const close = `close-stage review REVIEW=${confirmed.length ? 'fail' : 'pass'}`
+  const afterReview = await seq([close, 'open-stage qa'], 'close-stage review')
   if (!ok(step(afterReview, 0))) {
     return { stopped: stop('review', 'files changed during the review stage (the reviewer must not write)') }
   }
-  return { confirmed: run.review.confirmed }
+  return { confirmed }
 }
+const reviewStage = post => (reviewed ? reReviewStage(post) : fullReview(post))
 // The rest of the run, from briefs on.
 const runAfterPlan = async () => {
 if (!ok(step(first, 2))) return stop('prepare', 'briefs failed', { gate: step(first, 2) })
@@ -583,7 +737,7 @@ while (true) {
     const defects = verificationDefects(run.verification)
     if (!defects.length) return stop('verification', 'a verification phase fails and no work package owns the failure (see verification)')
     const eligible = splitByLimit(defects)
-    run.pending = [...qaPending, ...limitPending, ...concernPending]
+    run.pending = pendingNow()
     if (!eligible.length) return run
     const fixed = await fixCycle(eligible, false)
     if (fixed.stopped) return fixed.stopped
@@ -613,7 +767,7 @@ while (true) {
 
   const eligible = implDefects.length ? splitByLimit(implDefects) : []
   qaPending = baseline
-  run.pending = [...qaPending, ...limitPending, ...concernPending]
+  run.pending = pendingNow()
   if (eligible.length === 0) {
     run.result = implDefects.length || qa.status === 'BLOCKER' || run.pending.some(p => blocks(p)) ? 'REVIEW' : 'OK'
     const docs = run.result === 'OK' && plan.docs
@@ -635,4 +789,4 @@ while (true) {
   post = fixed.post
 }
 }
-return await runAfterPlan()
+return budgetAtStart() || await runAfterPlan()

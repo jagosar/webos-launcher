@@ -296,5 +296,23 @@ class HookLauncherTests(RepoCase):
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertNotIn("FROZEN", r.stdout + r.stderr)
 
+class SharedReviewClaimTests(RepoCase):
+    """From test_acceptance_v213 ac_007: both reviewers claim REVIEW and stay read-only; a package is claimed once."""
+
+    def as_type(self, payload, agent_id, agent_type):
+        return self.repo.run("hook", stdin=json.dumps(dict(payload, agent_id=agent_id, agent_type=agent_type)))
+
+    def test_both_reviewers_share_review_and_cannot_write(self):
+        claim = "python3 .claude/bin/agentic.py claim "
+        self.assertEqual(self.as_type(bash_payload(claim + "REVIEW"), "r1", "reviewer").returncode, 0)
+        self.assertEqual(self.as_type(bash_payload(claim + "REVIEW"), "s1", "standards-reviewer").returncode, 0)
+        write = {"tool_name": "Write", "tool_input": {"file_path": str(self.repo.dir / "src/a.py"), "content": "x\n"}}
+        self.assertEqual(self.as_type(write, "s1", "standards-reviewer").returncode, 2)
+        self.assertEqual(self.as_type(bash_payload(claim + "WP-01"), "i1", "implementer").returncode, 0)
+        second = self.as_type(bash_payload(claim + "WP-01"), "i2", "implementer")
+        self.assertEqual(second.returncode, 2)
+        self.assertIn("was already claimed", second.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

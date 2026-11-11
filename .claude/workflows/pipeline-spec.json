@@ -7,7 +7,9 @@
     ],
     "refute_confidence": 0.7,
     "audit_rounds": 2,
-    "implementer_rules": true
+    "implementer_rules": true,
+    "escalation_model": "opus",
+    "advisor_model": null
   },
   "prompts": {
     "implement": "Implement {wp}. Your brief is {brief}: the parts of architecture.md your package needs.{rules}",
@@ -21,7 +23,8 @@
     "qa": "Run the system's QA validation according to architecture.md.{rules}",
     "doc_updater": "Update the documentation according to architecture.md and the integrated code.{rules}",
     "implement_full": "Implement {wp}. Your first attempt returned NEEDS_CONTEXT: {missing}. This time your brief is architecture.md, whole: read it and implement. If the document does not settle it, return BLOCKED with the section that should.{rules}",
-    "standards_reviewer": "Review the integrated code against section 7 of architecture.md and the rules below. Report only breaches of a written rule: name it in \"rule\".{rules}"
+    "standards_reviewer": "Review the integrated code against section 7 of architecture.md and the rules below. Report only breaches of a written rule: name it in \"rule\".{rules}",
+    "re_review": "Re-review the fix, on the {axis} axis only. These findings were confirmed before the fix, each with its fingerprint, as JSON:\n{findings}\nThe fix's diffs are {diffs}: read them and the code they changed. For each fingerprint say ADDRESSED or NOT_ADDRESSED, with the line that shows it. Report anything new in new_findings: it is recorded and does not block this run.{rules}"
   },
   "schemas": {
     "gatekeeper": {
@@ -685,6 +688,91 @@
             "string",
             "null"
           ]
+        }
+      }
+    },
+    "re-review": {
+      "type": "object",
+      "required": [
+        "status",
+        "verdicts",
+        "new_findings",
+        "not_checked"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "PASS",
+            "FAIL"
+          ]
+        },
+        "verdicts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "fingerprint",
+              "verdict",
+              "evidence"
+            ],
+            "properties": {
+              "fingerprint": {
+                "type": "string"
+              },
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "ADDRESSED",
+                  "NOT_ADDRESSED"
+                ]
+              },
+              "evidence": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "new_findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "tier",
+              "wp",
+              "file",
+              "problem",
+              "evidence"
+            ],
+            "properties": {
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "floor",
+                  "reflex",
+                  "finish"
+                ]
+              },
+              "wp": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "problem": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "not_checked": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     }

@@ -1,4 +1,4 @@
-"""Tests of findings.py: tiers, the fall-back to severity, waivers and the text checksum.
+"""Tests of findings.py: tiers, the fall-back to severity, waivers, the text checksum and the fingerprints.
 
 Run: python3 -m unittest discover -s .claude/bin -p "test_findings.py"
 """
@@ -86,6 +86,47 @@ class TextSumTests(unittest.TestCase):
 
     def test_one_changed_character_changes_the_sum(self):
         self.assertNotEqual(findings.text_sum("No magic numbers"), findings.text_sum("No magic number."))
+
+
+class FingerprintTests(unittest.TestCase):
+    FINDING = {"axis": "spec", "tier": "floor", "file": "src/a.py", "problem": "  Off by ONE in total  "}
+
+    def test_a_pinned_value_that_the_workflow_must_equal(self):
+        self.assertEqual(findings.fingerprint(self.FINDING), "Fb361d20c")
+
+    def test_the_line_the_evidence_and_the_case_of_the_problem_do_not_count(self):
+        same = dict(self.FINDING, problem="off by one in total", line=9, evidence="other words")
+        self.assertEqual(findings.fingerprint(same), findings.fingerprint(self.FINDING))
+
+    def test_each_named_part_counts(self):
+        base = findings.fingerprint(self.FINDING)
+        for key, value in (("axis", "standards"), ("tier", "reflex"), ("rule", "No magic numbers"),
+                           ("file", "src/b.py"), ("problem", "off by two")):
+            with self.subTest(key=key):
+                self.assertNotEqual(findings.fingerprint(dict(self.FINDING, **{key: value})), base)
+
+    def test_only_the_first_80_code_points_of_the_problem_count(self):
+        long = "\u00e9" * 80
+        self.assertEqual(findings.fingerprint({"problem": long + "x"}), findings.fingerprint({"problem": long + "y"}))
+        self.assertNotEqual(findings.fingerprint({"problem": long[:79] + "x"}),
+                            findings.fingerprint({"problem": long[:79] + "y"}))
+
+    def test_the_problem_is_lowered_not_casefolded_as_the_workflow_does(self):
+        self.assertNotEqual(findings.fingerprint({"problem": "\u00df"}), findings.fingerprint({"problem": "ss"}))
+        self.assertEqual(findings.fingerprint({"problem": "\u00c9"}), findings.fingerprint({"problem": "\u00e9"}))
+
+    def test_missing_fields_are_empty_text(self):
+        self.assertEqual(findings.fingerprint({}), findings.fingerprint({"axis": None, "rule": ""}))
+        self.assertRegex(findings.fingerprint({}), r"^F[0-9a-f]{8}$")
+
+    def test_repeated_values_are_numbered_and_the_input_is_not_changed(self):
+        other = dict(self.FINDING, file="src/b.py")
+        given = [self.FINDING, dict(self.FINDING), other, dict(self.FINDING)]
+        out = findings.with_fingerprints(given)
+        fp = findings.fingerprint(self.FINDING)
+        self.assertEqual([f["fingerprint"] for f in out], [fp, fp + "-2", findings.fingerprint(other), fp + "-3"])
+        self.assertFalse(any("fingerprint" in f for f in given))
+        self.assertEqual(findings.with_fingerprints([]), [])
 
 
 if __name__ == "__main__":

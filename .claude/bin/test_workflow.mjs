@@ -25,6 +25,7 @@ async function simulate(scenario = {}, args = {}) {
   let qaRound = 0
   let auditRound = 0
   const implCalls = {}
+  const reReviewRounds = {}
   const respond = cmd => {
     executed.push(cmd)
     const forced = scenario.gate && scenario.gate(cmd)
@@ -38,7 +39,13 @@ async function simulate(scenario = {}, args = {}) {
     return { exit_code: 0, output: 'RESULTADO: OK' }
   }
   const agent = async (prompt, opts) => {
-    calls.push({ type: opts.agentType, label: opts.label, prompt })
+    calls.push({ type: opts.agentType, label: opts.label, prompt, model: opts.model })
+    // A re-review is told apart by its schema, so it never uses up a round of the full review.
+    if (JSON.stringify(opts.schema) === JSON.stringify(spec.schemas['re-review'])) {
+      schemas['re-review'] = opts.schema
+      reReviewRounds[opts.agentType] = (reReviewRounds[opts.agentType] || 0) + 1
+      return reReviewReport(scenario.reReview, opts.agentType, reReviewRounds[opts.agentType], prompt)
+    }
     schemas[opts.agentType] = opts.schema
     switch (opts.agentType) {
       case 'gatekeeper': {
@@ -98,6 +105,21 @@ async function simulate(scenario = {}, args = {}) {
   const parallel = thunks => Promise.all(thunks.map(t => t()))
   const result = await script(agent, parallel, () => {}, () => {}, args)
   return { result, calls, schemas, gateCalls, gates: executed }
+}
+
+// The declared entry of this re-review call (the last one repeats; default ADDRESSED) gives one verdict to every
+// fingerprint of the prompt, or none when its verdict is null; a null entry is no report.
+function reReviewReport(declared, agentType, round, prompt) {
+  const entries = (declared && declared[agentType]) || [{ verdict: 'ADDRESSED' }]
+  const entry = entries[Math.min(round, entries.length) - 1]
+  if (entry === null) return null
+  const verdict = entry.verdict ?? null
+  const fps = [...prompt.matchAll(/"fingerprint":"(F[0-9a-f]{8}(?:-\d+)?)"/g)].map(m => m[1])
+  return {
+    status: verdict === 'NOT_ADDRESSED' ? 'FAIL' : 'PASS',
+    verdicts: verdict === null ? [] : fps.map(fingerprint => ({ fingerprint, verdict, evidence: 'line 3' })),
+    new_findings: entry.new_findings || [], not_checked: [],
+  }
 }
 
 const grave = (wp, severity = 'high') => ({ severity, wp, file: 'src/a.py', line: 3, problem: 'p', evidence: 'e' })
@@ -480,6 +502,7 @@ function fromDecl(d) {
     verifier: d.verifier,
     docs: d.docs,
     reports: d.reports,
+    reReview: d.re_review,
   }
 }
 // Counts of the last review, per axis: spec [confirmed, refuted, advisory], standards [..., waived].
@@ -489,15 +512,26 @@ const reviewAxes = review => {
   const std = review.standards || {}
   return { spec: ['confirmed', 'refuted', 'advisory'].map(k => (spec[k] || []).length), standards: ['confirmed', 'refuted', 'advisory', 'waived'].map(k => (std[k] || []).length) }
 }
+// [addressed, still confirmed, new] per axis of the last review when it was a re-review; null otherwise.
+const reReviewCounts = review => {
+  if (!review || !review.scoped) return null
+  const out = {}
+  for (const axis of ['spec', 'standards']) {
+    out[axis] = [(review[axis].addressed || []).length, (review[axis].confirmed || []).length, (review.new || []).filter(f => f.axis === axis).length]
+  }
+  return out
+}
 const summarize = ({ result, calls, gates, gateCalls }) => {
   const seen = {}
   const prompts = {}
   const agents = []
+  const models = []
   for (const c of calls.filter(x => x.type !== 'gatekeeper')) {
     const key = `${c.type}:${c.label}`
     seen[key] = (seen[key] || 0) + 1
     prompts[`${key}#${seen[key]}`] = c.prompt
     agents.push(key)
+    if (c.model) models.push(`${key}#${seen[key]}=${c.model}`)
   }
   return {
     result: result.result, failed_stage: result.failed_stage ?? null, detail: result.detail ?? null, fix_cycles: result.fix_cycles,
@@ -507,6 +541,7 @@ const summarize = ({ result, calls, gates, gateCalls }) => {
     review_callers: (result.review && result.review.callers) || 0,
     verification_failures: (result.verification_failures || []).length,
     review_axes: reviewAxes(result.review), rules: result.rules ?? null,
+    agent_calls: result.agent_calls, models: models.sort(), re_review: reReviewCounts(result.review),
   }
 }
 if (process.argv.includes('--dump')) {
@@ -527,6 +562,23 @@ test('the schemas of the workflow are the ones in pipeline-spec.json', async () 
   const grave = { severity: 'high', wp: 'WP-01', file: 'src/a.py', line: 3, problem: 'p', evidence: 'e' }
   const withFinding = await simulate({ review: () => ({ status: 'FAIL', findings: [grave] }), verifier: { is_real: false, confidence: 0.9, reasoning: 'r' } })
   assert.deepEqual(withFinding.schemas.verifier, spec.schemas.verifier)
+  const fixed = await simulate({ review: round => (round === 1 ? { status: 'FAIL', findings: [grave] } : { status: 'PASS', findings: [] }) })
+  assert.deepEqual(fixed.schemas['re-review'], spec.schemas['re-review'], 're-review: the schema drifted from pipeline-spec.json')
+  assert.deepEqual(fixed.schemas.reviewer, spec.schemas.reviewer, 'the full review keeps its own schema')
+})
+
+test('the re-review prompt and the escalation follow pipeline-spec.json', async () => {
+  const grave = { severity: 'high', wp: 'WP-01', file: 'src/a.py', line: 3, problem: 'p', evidence: 'e' }
+  const { calls } = await simulate({ review: () => ({ status: 'FAIL', findings: [grave] }), plan: { escalation_model: 'opus' },
+    reReview: { reviewer: [{ verdict: 'NOT_ADDRESSED' }] } })
+  const again = calls.find(c => c.label === 'reviewer (re-review)')
+  const head = spec.prompts.re_review.split('{findings}')[0].replace('{axis}', 'Spec')
+  assert.ok(again.prompt.startsWith(head), again.prompt.slice(0, 120))
+  assert.ok(again.prompt.includes('"fingerprint":"F'), 'the open findings carry their fingerprint')
+  const fixes = calls.filter(c => c.label === 'WP-01 (fix)')
+  assert.deepEqual(fixes.map(c => c.model), [undefined, 'opus'], 'only the last allowed attempt escalates')
+  assert.equal(spec.constants.escalation_model, 'opus')
+  assert.equal(spec.constants.advisor_model, null, 'the advisor is the fallback\'s experiment, off by default')
 })
 
 test('the constants of the workflow are the ones in pipeline-spec.json', async () => {

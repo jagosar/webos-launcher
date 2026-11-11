@@ -1,8 +1,11 @@
-"""Tests of manifest_check.py beyond test_agentic's ValidateTests: commands that would allow anything, and the
-never-owned files of a plan for the flow itself. Moved here from the retired per-release acceptance files (design 0017).
+"""Tests of manifest_check.py beyond test_agentic's ValidateTests: commands that would allow anything, the never-owned
+files of a plan for the flow itself, the waivers and the Source column of section 4b. Moved here from the retired
+per-release acceptance files (designs 0017 and 0021).
 
 Run: python3 -m unittest discover -s .claude/bin -p "test_manifest_check.py"
 """
+import json
+import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -12,7 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agentic  # noqa: E402
 import core  # noqa: E402
 import manifest_check  # noqa: E402
-from test_agentic import MANIFEST  # noqa: E402
+from test_agentic import MANIFEST, Repo  # noqa: E402
+
+ROOT = Path(__file__).resolve().parents[2]
+WAIVER = {"rule": "No magic numbers", "scope": "src/b/x.py", "reason": "ana: tax table constants are the spec"}
 
 
 def errors(**fields):
@@ -144,6 +150,70 @@ class ProvenanceTests(unittest.TestCase):
     def test_a_fenced_heading_does_not_start_section_4b(self):
         text = "# A\n```\n## 4b. not a section\n| a | b | Source |\n|---|---|---|\n| x | y | z |\n```\n"
         self.assertEqual(manifest_check.provenance_problems(text), ([], []))
+
+
+class ValidateCommandTests(unittest.TestCase):
+    """Waivers and the provenance of section 4b, through `validate`, `pipeline-plan` and `briefs` in a project."""
+
+    def project(self, waivers=None, arch=None):
+        manifest = json.loads(json.dumps(MANIFEST))
+        if waivers is not None:
+            manifest["waivers"] = waivers
+        repo = Repo(manifest)
+        self.addCleanup(repo.cleanup)
+        shutil.copytree(ROOT / ".claude/rules-library", repo.dir / ".claude/rules-library")
+        if arch is not None:
+            text = (repo.dir / "architecture.md").read_text(encoding="utf-8")
+            repo.write("architecture.md", text.replace("# A\n", "# A\n\n" + arch + "\n", 1))
+        return repo
+
+    def test_waivers_are_checked_by_validate(self):
+        for waivers in (None, [WAIVER]):
+            r = self.project(waivers).run("validate")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        bad = [([dict(WAIVER, scope="src/")], 'waivers[0]: scope "src/" is wider than any package\'s files'),
+               ([dict(WAIVER, scope="**")], 'waivers[0]: scope "**" must be one file or one folder ending in "/"'),
+               ([dict(WAIVER, reason="because")], 'waivers[0]: reason must be "<who decided>: <evidence>"'),
+               ([dict(WAIVER, rule="no such rule at all")],
+                'waivers[0]: rule "no such rule at all" is not in the installed rules'),
+               ([WAIVER, WAIVER], "waivers[1]: repeats waivers[0]")]
+        for waivers, message in bad:
+            with self.subTest(message=message):
+                r = self.project(waivers).run("validate")
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn(message, r.stderr)
+
+    def table(self, *rows, source=True):
+        head = "| What | Where | Rule |" + (" Source |" if source else "")
+        sep = "|---|---|---|" + ("---|" if source else "")
+        return "## 4b. Existing code context\n" + "\n".join([head, sep, *rows]) + "\n\n## 5. Data model\n"
+
+    def test_the_source_column_is_checked_by_validate_and_pipeline_plan(self):
+        cases = [(self.table("| a | `src/a.py:1-3` | r |", source=False), 0,
+                  "warning: section 4b has no Source column: mark each row read or inferred"),
+                 (self.table("| a | `src/a.py:1-3` | r | read |", "| b | nowhere | r | inferred |"), 0, None),
+                 (self.table("| a | `src/a.py:1-9` | r | read |"), 1,
+                  "section 4b, row 1: src/a.py:1-9 does not exist or is out of range"),
+                 (self.table("| a | nowhere | r | read |"), 1, "section 4b, row 1: read needs a file:line"),
+                 (self.table("| a | `src/a.py:1-3` | r | seen |"), 1,
+                  "section 4b, row 1: Source must be read or inferred")]
+        for arch, code, message in cases:
+            with self.subTest(message=message):
+                repo = self.project(arch=arch)
+                repo.write("src/a.py", "a = 1\nb = 2\nc = 3\n")
+                r = repo.run("validate")
+                self.assertEqual(r.returncode, code, r.stdout + r.stderr)
+                if message:
+                    self.assertIn(message, r.stdout + r.stderr)
+                elif code == 0:
+                    self.assertNotIn("section 4b", r.stdout)
+                if "1-9" in arch:
+                    plan = repo.run("pipeline-plan")
+                    self.assertEqual(plan.returncode, 1)
+                    self.assertIn(message, plan.stderr)
+                    self.assertEqual(repo.run("briefs").returncode, 0, "only validate and pipeline-plan check it")
+        for arch in ("", "## 4b. Existing code context\nNo table here.\n\n## 5. Data model\n"):
+            self.assertEqual(self.project(arch=arch).run("validate").returncode, 0)
 
 
 if __name__ == "__main__":

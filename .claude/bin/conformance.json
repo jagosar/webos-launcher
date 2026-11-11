@@ -1113,6 +1113,388 @@
         "rules_sum": 4823,
         "implementer_rules": false
       }
+    },
+    {
+      "name": "a fix is re-reviewed on its open findings only",
+      "review": [
+        {
+          "status": "FAIL",
+          "findings": [
+            {
+              "tier": "floor",
+              "severity": "high",
+              "provenance": "read",
+              "wp": "WP-01",
+              "file": "src/a.py",
+              "line": 3,
+              "problem": "OPEN-PROBLEM",
+              "evidence": "e",
+              "fix": "f",
+              "if_skipped": "s"
+            }
+          ],
+          "needs_validation": [],
+          "not_checked": []
+        }
+      ]
+    },
+    {
+      "name": "a finding not addressed is fixed again",
+      "review": [
+        {
+          "status": "FAIL",
+          "findings": [
+            {
+              "tier": "floor",
+              "severity": "high",
+              "provenance": "read",
+              "wp": "WP-01",
+              "file": "src/a.py",
+              "line": 3,
+              "problem": "OPEN-PROBLEM",
+              "evidence": "e",
+              "fix": "f",
+              "if_skipped": "s"
+            }
+          ],
+          "needs_validation": [],
+          "not_checked": []
+        }
+      ],
+      "re_review": {
+        "reviewer": [
+          {
+            "verdict": "NOT_ADDRESSED"
+          }
+        ]
+      }
+    },
+    {
+      "name": "a missing verdict counts as not addressed",
+      "review": [
+        {
+          "status": "FAIL",
+          "findings": [
+            {
+              "tier": "floor",
+              "severity": "high",
+              "provenance": "read",
+              "wp": "WP-01",
+              "file": "src/a.py",
+              "line": 3,
+              "problem": "OPEN-PROBLEM",
+              "evidence": "e",
+              "fix": "f",
+              "if_skipped": "s"
+            }
+          ],
+          "needs_validation": [],
+          "not_checked": []
+        }
+      ],
+      "re_review": {
+        "reviewer": [
+          {
+            "verdict": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "a new finding in a re-review goes to pending",
+      "review": [
+        {
+          "status": "FAIL",
+          "findings": [
+            {
+              "tier": "floor",
+              "severity": "high",
+              "provenance": "read",
+              "wp": "WP-01",
+              "file": "src/a.py",
+              "line": 3,
+              "problem": "OPEN-PROBLEM",
+              "evidence": "e",
+              "fix": "f",
+              "if_skipped": "s"
+            }
+          ],
+          "needs_validation": [],
+          "not_checked": []
+        }
+      ],
+      "re_review": {
+        "reviewer": [
+          {
+            "verdict": "ADDRESSED",
+            "new_findings": [
+              {
+                "tier": "floor",
+                "wp": "WP-02",
+                "file": "src/b/x.py",
+                "problem": "NEW-PROBLEM",
+                "evidence": "e"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "a finding fixed before a verification failure is still re-reviewed",
+      "review": [
+        {
+          "status": "FAIL",
+          "findings": [
+            {
+              "tier": "floor",
+              "severity": "high",
+              "provenance": "read",
+              "wp": "WP-01",
+              "file": "src/a.py",
+              "line": 3,
+              "problem": "  \u00c9T\u00c9 \u00dfTRASSE \ud83d\ude00 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  ",
+              "evidence": "e",
+              "fix": "f",
+              "if_skipped": "s"
+            }
+          ],
+          "needs_validation": [],
+          "not_checked": []
+        }
+      ],
+      "verify": [
+        null,
+        {
+          "exit_code": 3,
+          "output": {
+            "ok": false,
+            "blocking": [
+              "tests"
+            ],
+            "preexisting_failures": [],
+            "suspects": {
+              "WP-02": {
+                "phases": [
+                  "tests"
+                ],
+                "files": [
+                  "src/b/x.py"
+                ],
+                "acs": [
+                  "AC-002"
+                ]
+              }
+            },
+            "phases": [
+              {
+                "name": "tests",
+                "passed": false,
+                "status": "fails",
+                "tail": [
+                  "FAILED src/b/x.py test_ac_002"
+                ]
+              }
+            ]
+          }
+        },
+        null
+      ]
+    },
+    {
+      "name": "a finding outside every package survives the re-review",
+      "review": [
+        {
+          "status": "FAIL",
+          "findings": [
+            {
+              "tier": "floor",
+              "severity": "high",
+              "provenance": "read",
+              "wp": "WP-01",
+              "file": "src/a.py",
+              "line": 3,
+              "problem": "OPEN-PROBLEM",
+              "evidence": "e",
+              "fix": "f",
+              "if_skipped": "s"
+            },
+            {
+              "tier": "floor",
+              "severity": "high",
+              "provenance": "read",
+              "wp": "WP-99",
+              "file": "src/z.py",
+              "line": 3,
+              "problem": "OUTSIDE-PROBLEM",
+              "evidence": "e",
+              "fix": "f",
+              "if_skipped": "s"
+            }
+          ],
+          "needs_validation": [],
+          "not_checked": []
+        }
+      ]
+    },
+    {
+      "name": "a re-review that returns no report stops the run",
+      "review": [
+        {
+          "status": "FAIL",
+          "findings": [
+            {
+              "tier": "floor",
+              "severity": "high",
+              "provenance": "read",
+              "wp": "WP-01",
+              "file": "src/a.py",
+              "line": 3,
+              "problem": "OPEN-PROBLEM",
+              "evidence": "e",
+              "fix": "f",
+              "if_skipped": "s"
+            }
+          ],
+          "needs_validation": [],
+          "not_checked": []
+        }
+      ],
+      "re_review": {
+        "reviewer": [
+          null
+        ]
+      }
+    },
+    {
+      "name": "the last fix attempt escalates",
+      "plan": {
+        "escalation_model": "opus",
+        "max_fix_cycles": 2
+      },
+      "review": [
+        {
+          "status": "FAIL",
+          "findings": [
+            {
+              "tier": "floor",
+              "severity": "high",
+              "provenance": "read",
+              "wp": "WP-03",
+              "file": "src/c.py",
+              "line": 3,
+              "problem": "OPEN-PROBLEM",
+              "evidence": "e",
+              "fix": "f",
+              "if_skipped": "s"
+            }
+          ],
+          "needs_validation": [],
+          "not_checked": []
+        }
+      ],
+      "re_review": {
+        "reviewer": [
+          {
+            "verdict": "NOT_ADDRESSED"
+          }
+        ]
+      }
+    },
+    {
+      "name": "without an escalation model no attempt escalates",
+      "plan": {
+        "escalation_model": null,
+        "max_fix_cycles": 2
+      },
+      "review": [
+        {
+          "status": "FAIL",
+          "findings": [
+            {
+              "tier": "floor",
+              "severity": "high",
+              "provenance": "read",
+              "wp": "WP-03",
+              "file": "src/c.py",
+              "line": 3,
+              "problem": "OPEN-PROBLEM",
+              "evidence": "e",
+              "fix": "f",
+              "if_skipped": "s"
+            }
+          ],
+          "needs_validation": [],
+          "not_checked": []
+        }
+      ],
+      "re_review": {
+        "reviewer": [
+          {
+            "verdict": "NOT_ADDRESSED"
+          }
+        ]
+      }
+    },
+    {
+      "name": "a budget too small for the run stops before any agent",
+      "plan": {
+        "max_agent_calls": 5
+      }
+    },
+    {
+      "name": "a budget that cannot fund a fix cycle stops with the gap",
+      "plan": {
+        "max_agent_calls": 11
+      },
+      "review": [
+        {
+          "status": "FAIL",
+          "findings": [
+            {
+              "tier": "floor",
+              "severity": "high",
+              "provenance": "read",
+              "wp": "WP-01",
+              "file": "src/a.py",
+              "line": 3,
+              "problem": "OPEN-PROBLEM",
+              "evidence": "e",
+              "fix": "f",
+              "if_skipped": "s"
+            }
+          ],
+          "needs_validation": [],
+          "not_checked": []
+        }
+      ]
+    },
+    {
+      "name": "no budget runs as before",
+      "plan": {
+        "max_agent_calls": null
+      },
+      "review": [
+        {
+          "status": "FAIL",
+          "findings": [
+            {
+              "tier": "floor",
+              "severity": "high",
+              "provenance": "read",
+              "wp": "WP-01",
+              "file": "src/a.py",
+              "line": 3,
+              "problem": "OPEN-PROBLEM",
+              "evidence": "e",
+              "fix": "f",
+              "if_skipped": "s"
+            }
+          ],
+          "needs_validation": [],
+          "not_checked": []
+        }
+      ]
     }
   ]
 }

@@ -82,6 +82,8 @@ DEFAULT_CONFIG = {
     # "inherit": they inherit the environment as is (useful in CI with an API key).
     "auth": "subscription",
     "max_fix_cycles": 2,  # further --fix cycles on the same WP escalate to the human or to /architect
+    "escalation": True,  # the last fix attempt of a package (2 or later) runs on the spec's escalation_model
+    # "max_agent_calls": a whole number caps the model agent calls of a run (absent or null: no budget)
 }
 # Variables that would make an agent bill the API instead of the subscription.
 API_AUTH_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")

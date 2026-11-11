@@ -7,14 +7,16 @@ test_pipeline.py runs the same scenarios (conformance.json) against the two and 
 
 `Pipeline` knows nothing about processes: it receives
   gate(cmds, label)                      -> {"steps": [{"cmd", "exit_code", "output"}]} or None
-  agent(prompt, agent_type, label, id)   -> the agent's structured report (a dict) or None
-which agentic.py binds to real commands and real `claude -p` runs, and the tests bind to a simulated world.
+  agent(prompt, agent_type, label, id, **opts) -> the agent's structured report (a dict) or None
+which agentic.py binds to real commands and real `claude -p` runs, and the tests bind to a simulated world. `opts`
+holds only what a call sets: model= (the last fix attempt, escalated), resume=True (the other fix attempts: continue
+the package's own session, which only the fallback can) and schema= (a re-review, whose report is not the agent's).
 """
 import concurrent.futures
 import json
 import re
 
-from findings import blocks, text_sum, waiver_for
+from findings import blocks, text_sum, waiver_for, with_fingerprints
 
 
 def lines_json(output):
@@ -113,6 +115,11 @@ def pending_key(d):
 
 
 REVIEW_SOURCES = {"spec": "reviewer", "standards": "standards-reviewer"}
+AXES = ("spec", "standards")
+AXIS_NAMES = {"spec": "Spec", "standards": "Standards"}
+NO_RE_REVIEW = {"spec": "the reviewer returned no re-review report",
+                "standards": "the standards reviewer returned no re-review report"}
+RE_REVIEW_SCHEMA = "re-review"
 POINTED_RULES = " Rules you must follow (language and common): {paths}."
 
 
@@ -145,9 +152,13 @@ class Pipeline:
         self.needs_review = []  # the last review's needs-validation items
         self.concern_pending = []  # DONE_WITH_CONCERNS doubts, kept across cycles and handed to every review
         self.context_given = set()  # packages already re-dispatched once with the whole document
+        # The review after the first full one is scoped: the confirmed findings of the packages fixed since then.
+        self.reviewed, self.fixed_since_review, self.fix_count_at_review = False, set(), {}
+        self.last_confirmed = {axis: [] for axis in AXES}
+        self.new_pending = []  # what a re-review found that was not open: listed, never fixed in this run
         self.run = {"result": "REVIEW", "stages": [], "baseline": None, "work_packages": {}, "verification": None,
                     "review": None, "qa": None, "test_audit": None, "docs": None, "fix_cycles": 0, "pending": [],
-                    "not_checked": [], "gate_denials": {}, "verification_failures": []}
+                    "not_checked": [], "gate_denials": {}, "verification_failures": [], "agent_calls": 0}
 
     # ---------- utilities ----------
     def stop(self, stage, detail, **extra):
@@ -170,9 +181,11 @@ class Pipeline:
     def ok(st):
         return bool(st) and st["exit_code"] == 0
 
-    def call(self, agent_type, label, prompt, id=None):
+    def call(self, agent_type, label, prompt, id=None, model=None, resume=False, schema=None):
+        opts = {k: v for k, v in (("model", model), ("resume", resume), ("schema", schema)) if v}
+        self.run["agent_calls"] += 1  # before the call: one that fails was still paid for
         try:
-            report = self._agent(prompt, agent_type, label, id)
+            report = self._agent(prompt, agent_type, label, id, **opts)
         except Exception as e:  # noqa: BLE001
             self.log(f"{label} failed: {e}")
             return None
@@ -202,6 +215,9 @@ class Pipeline:
         if not (report and isinstance(report.get("files"), list) and seen is not None):
             return []
         return [f for f in report["files"] if not any(f == s or f.endswith("/" + s) for s in seen)]
+
+    def pending_now(self):
+        return self.qa_pending + list(self.limit_pending) + list(self.concern_pending) + list(self.new_pending)
 
     def split_by_limit(self, defects):
         eligible = []
@@ -266,6 +282,9 @@ class Pipeline:
         plan = self.plan
         self.rules, self.run["rules"] = rules_of(plan)
         self.impl_rules = "" if plan.get("implementer_rules") is False else self.rules
+        short = self.budget_at_start()
+        if short:
+            return short
         if not self.ok(self.step(first, 2)):
             return self.stop("prepare", "briefs failed", gate=self.step(first, 2))
         if self.start_wave is None:
@@ -356,7 +375,9 @@ class Pipeline:
                                        diff=f".claude/state/runs/{wp}.fix-{attempt - 1}.diff")
                     prompt = render(self.prompts["fix"], wp=wp, brief=brief(wp), defects=compact(defects_by_wp[wp]),
                                     retry=retry, rules=self.impl_rules)
-                return self.call(plan["agents"].get(wp) or "implementer", f"{wp} (fix)" if defects_by_wp else wp, prompt, wp)
+                opts = self.attempt_options(wp) if defects_by_wp else {}
+                return self.call(plan["agents"].get(wp) or "implementer", f"{wp} (fix)" if defects_by_wp else wp, prompt, wp,
+                                 **opts)
             return go
         reports = self.parallel([thunk(wp) for wp in wp_ids])
         reports = self.with_context(wp_ids, reports, bool(defects_by_wp))
@@ -365,6 +386,14 @@ class Pipeline:
             if rep and rep.get("status") == "DONE_WITH_CONCERNS":
                 self.concern_pending.extend(concern_item(wp, c) for c in rep.get("concerns") or [] if isinstance(c, str))
         return f"close-stage {wave} {' '.join(wave_states(wp_ids, reports))}{' --fix' if defects_by_wp else ''}"
+
+    def attempt_options(self, wp):
+        """The last allowed fix attempt (2 or later) runs on the escalation model, fresh; any other continues the
+        package's session. The prompt is the same either way."""
+        attempt, model = self.fix_count.get(wp, 0) + 1, self.plan.get("escalation_model")
+        if attempt >= 2 and attempt == self.plan["max_fix_cycles"] and model:
+            return {"model": model}
+        return {"resume": True}
 
     def with_context(self, wp_ids, reports, fixing):
         """NEEDS_CONTEXT in an implement wave: one more call, with the whole document, the first time only. The second
@@ -421,6 +450,9 @@ class Pipeline:
             opened = True
 
     def fix_cycle(self, defects, opened):
+        short = self.budget_for_cycle(defects)
+        if short:
+            return {"stopped": short}
         self.run["fix_cycles"] += 1
         self.phase("Fixes")
         by = self.group_by_wp(defects)
@@ -431,7 +463,48 @@ class Pipeline:
         out = self.run_waves(waves, by_wave, by, opened)
         for wp in by:
             self.fix_count[wp] = self.fix_count.get(wp, 0) + 1
+        self.fixed_since_review |= set(by)
         return out
+
+    # ---------- the budget, in model agent calls ----------
+    def budget_at_start(self):
+        """A stop when the budget cannot pay for wave 0, every package once, both reviewers, QA and the docs."""
+        plan, most = self.plan, self.plan.get("max_agent_calls")
+        if most is None:
+            return None
+        wave0 = 2 if self.start_wave is None and plan["acceptance"] and plan["type"] != "refactor" else 0
+        packages = sum(len(wps) for w, wps in plan["work_packages"].items()
+                       if self.start_wave is None or int(w) >= self.start_wave)
+        minimum = wave0 + packages + 2 + 1 + (1 if plan.get("docs") else 0)
+        if minimum <= most:
+            return None
+        return self.stop("budget", f"the budget of {most} agent calls cannot fund the run: it needs at least {minimum}")
+
+    def budget_for_cycle(self, defects):
+        """A stop, with the cycle's defects in pending, when the cycle and the review and QA after it do not fit."""
+        most = self.plan.get("max_agent_calls")
+        if most is None:
+            return None
+        packages = set(self.group_by_wp(defects))
+        scope = packages | self.fixed_since_review
+        reviewers = (len(AXES) if not self.reviewed else
+                     sum(1 for axis in AXES if any(f.get("wp") in scope for f in self.last_confirmed[axis])))
+        needed = len(packages) + reviewers + 1 + (1 if self.plan.get("docs") else 0)
+        left = most - self.run["agent_calls"]
+        if needed <= left:
+            return None
+        self.run["pending"] = self.run["pending"] + [{"type": "over budget", **d} for d in defects]
+        return self.stop("budget", f"the budget of {most} agent calls cannot fund another fix cycle and the review "
+                                   f"and QA after it: {needed} needed, {left} left")
+
+    def review_stage(self, post):
+        """The first review of the run is full; every later one re-reviews what the fixes since were meant to close."""
+        return self.re_review(post) if self.reviewed else self.review(post)
+
+    def reviewed_now(self, by_axis):
+        """What the next review starts from: these confirmed findings, and no package fixed since."""
+        self.reviewed, self.last_confirmed = True, by_axis
+        self.fixed_since_review, self.fix_count_at_review = set(), dict(self.fix_count)
 
     def review(self, post):
         """Both reviewers in parallel, one verifier per finding that blocks, the record per axis (never reranked).
@@ -452,8 +525,9 @@ class Pipeline:
         if not std_r:
             return {"stopped": self.stop("review", "the standards reviewer returned no report")}
         waivers = self.plan.get("waivers") or []
-        axes = {"spec": [{**f, "axis": "spec"} for f in spec_r["findings"]],
-                "standards": [{**f, "axis": "standards"} for f in std_r["findings"]]}
+        marked = with_fingerprints([{**f, "axis": "spec"} for f in spec_r["findings"]]
+                                   + [{**f, "axis": "standards"} for f in std_r["findings"]])
+        axes = {"spec": marked[:len(spec_r["findings"])], "standards": marked[len(spec_r["findings"]):]}
         waived = [{**f, "waiver": w["reason"]} for f in axes["standards"] for w in [waiver_for(f, waivers)] if w]
         graves = [f for f in axes["spec"] + axes["standards"] if blocks(f, self.blocking, waivers)]
         verdicts = self.parallel([
@@ -469,12 +543,53 @@ class Pipeline:
             record[axis] = {"confirmed": [f for f in mine if f not in refuted], "refuted": [f for f in mine if f in refuted],
                             "advisory": [f for f in items if f not in graves and not waiver_for(f, waivers)]}
         record["standards"]["waived"] = waived
-        self.run["review"] = {**record, **{k: record["spec"][k] + record["standards"][k]
-                                           for k in ("confirmed", "refuted", "advisory")},
+        self.run["review"] = {"scoped": False, **record, **{k: record["spec"][k] + record["standards"][k]
+                                                            for k in ("confirmed", "refuted", "advisory")},
                               "waived": waived, "opened": self.ok(post[1] if len(post) > 1 else None),
                               "callers": len(found)}
-        confirmed = self.run["review"]["confirmed"]
         self.needs_review = [self.needs_item("reviewer", i) for i in spec_r.get("needs_validation") or []]
+        return self.close_review({axis: record[axis]["confirmed"] for axis in AXES})
+
+    def re_review(self, post):
+        """Each axis re-reviews its open findings (the previous review's confirmed ones of the packages fixed since)
+        against the fixes' diffs, by fingerprint, without verifiers. A missing verdict is NOT_ADDRESSED; what is new
+        goes to pending and never starts a fix cycle. Returns {"confirmed": [...]} or {"stopped": <result>}."""
+        self.phase("Review")
+        scope = self.fixed_since_review
+        open_ = {axis: [f for f in self.last_confirmed[axis] if f.get("wp") in scope] for axis in AXES}
+        diffs = ", ".join(f".claude/state/runs/{wp}.fix-{n}.diff" for wp in sorted(scope)
+                          for n in range(self.fix_count_at_review.get(wp, 0) + 1, self.fix_count.get(wp, 0) + 1))
+        asked = [axis for axis in AXES if open_[axis]]
+        reports = dict(zip(asked, self.parallel([
+            (lambda axis=axis: self.call(REVIEW_SOURCES[axis], f"{REVIEW_SOURCES[axis]} (re-review)", render(
+                self.prompts["re_review"], axis=AXIS_NAMES[axis], findings=compact(open_[axis]), diffs=diffs,
+                rules=self.rules), "REVIEW", schema=RE_REVIEW_SCHEMA))
+            for axis in asked])))
+        for axis in asked:
+            if not reports[axis]:
+                return {"stopped": self.stop("review", NO_RE_REVIEW[axis])}
+        record, new = {}, []
+        for axis in AXES:
+            report = reports.get(axis) or {}
+            said = {v.get("fingerprint"): v.get("verdict") for v in report.get("verdicts") or [] if isinstance(v, dict)}
+            addressed = [f for f in open_[axis] if said.get(f["fingerprint"]) == "ADDRESSED"]
+            record[axis] = {"confirmed": [f for f in self.last_confirmed[axis] if f not in addressed], "refuted": [],
+                            "advisory": [], "addressed": addressed}
+            new += [{**f, "axis": axis} for f in report.get("new_findings") or [] if isinstance(f, dict)]
+        record["standards"]["waived"] = []
+        for f in new:
+            item = {"type": "new finding", "source": REVIEW_SOURCES[f["axis"]], **f}
+            if not any(pending_key(p) == pending_key(item) for p in self.new_pending):
+                self.new_pending.append(item)
+        self.run["review"] = {"scoped": True, **record, **{k: record["spec"][k] + record["standards"][k]
+                                                           for k in ("confirmed", "refuted", "advisory")},
+                              "waived": [], "new": new, "opened": self.ok(post[1] if len(post) > 1 else None),
+                              "callers": 0}
+        return self.close_review({axis: record[axis]["confirmed"] for axis in AXES})
+
+    def close_review(self, by_axis):
+        confirmed = by_axis["spec"] + by_axis["standards"]
+        self.reviewed_now(by_axis)
         after = self.seq([f"close-stage review REVIEW={'fail' if confirmed else 'pass'}", "open-stage qa"], "close-stage review")
         if not self.ok(self.step(after, 0)):
             return {"stopped": self.stop("review", "files changed during the review stage (the reviewer must not write)")}
@@ -495,7 +610,7 @@ class Pipeline:
                 if not defects:
                     return self.stop("verification", "a verification phase fails and no work package owns the failure (see verification)")
                 eligible = self.split_by_limit(defects)
-                run["pending"] = self.qa_pending + list(self.limit_pending) + list(self.concern_pending)
+                run["pending"] = self.pending_now()
                 if not eligible:
                     return run
                 fixed = self.fix_cycle(eligible, False)
@@ -504,7 +619,7 @@ class Pipeline:
                 post = fixed["post"]
                 continue
 
-            reviewed = self.review(post)
+            reviewed = self.review_stage(post)
             if "stopped" in reviewed:
                 return reviewed["stopped"]
             confirmed = reviewed["confirmed"]
@@ -528,7 +643,7 @@ class Pipeline:
 
             eligible = self.split_by_limit(impl) if impl else []
             self.qa_pending = baseline
-            run["pending"] = self.qa_pending + list(self.limit_pending) + list(self.concern_pending)
+            run["pending"] = self.pending_now()
             if not eligible:
                 run["result"] = ("REVIEW" if impl or qa["status"] == "BLOCKER"
                                  or any(blocks(p, self.blocking) for p in run["pending"]) else "OK")

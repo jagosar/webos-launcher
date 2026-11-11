@@ -1,5 +1,6 @@
-"""Tests of the one-off launchers (launch.py: run-wave and its --fix sources) and the usage they record, with a fake
-`claude`. Moved here from the retired per-release acceptance files (design 0017); each class names its origin.
+"""Tests of the launchers (launch.py: run-wave and its --fix sources, run-review, the fallback engine's agent callable
+and the plan's configuration) and the usage they record, with a fake `claude`. Moved here from the retired
+per-release acceptance files (designs 0017 and 0021); each class names its origin.
 
 Run: python3 -m unittest discover -s .claude/bin -p "test_launcher.py"
 """
@@ -13,7 +14,10 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_agentic import Repo, testutil  # noqa: E402
+import launch  # noqa: E402
+from test_agentic import MANIFEST, Repo, testutil  # noqa: E402
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def finding(problem, severity="high", wp="WP-02"):
@@ -165,6 +169,142 @@ class FixSourceTests(LauncherCase):
         r = self.fix("--fix")
         self.assertEqual(r.returncode, 1)
         self.assertIn("run-pipeline, run-review or run-qa", r.stderr)
+
+
+RULE = "No magic numbers"
+
+
+class ReviewAxesLaunchTests(LauncherCase):
+    """From test_acceptance_v213 ac_003, ac_006 and ac_007: what a fix takes from each axis, the rules the one-off
+    commands print, and run-review starting both reviewers."""
+
+    def reports(self, repo):
+        floor = dict(finding("FLOOR-ONE"), tier="floor", provenance="read")
+        rule_hit = dict(finding("REFLEX-ONE"), tier="reflex", rule=RULE, provenance="read")
+        note = dict(rule_hit, tier="finish", problem="FINISH-ONE")
+        repo.write(".claude/state/runs/REVIEW.json", structured({
+            "status": "FAIL", "findings": [floor], "needs_validation": [], "not_checked": []}))
+        repo.write(".claude/state/runs/STANDARDS.json", structured({
+            "status": "FAIL", "axis": "standards", "findings": [rule_hit, note], "not_checked": []}))
+
+    def test_a_fix_takes_floor_and_reflex_and_a_waiver_drops_the_reflex(self):
+        self.reports(self.repo)
+        r = self.fix("--fix")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        for word in ("FLOOR-ONE", "REFLEX-ONE"):
+            self.assertIn(word, self.prompt())
+        self.assertNotIn("FINISH-ONE", self.prompt())
+        manifest = json.loads(json.dumps(MANIFEST))
+        manifest["waivers"] = [{"rule": RULE, "scope": "src/b/", "reason": "ana: constants of the tax table"}]
+        waived = Repo(manifest)
+        self.addCleanup(waived.cleanup)
+        shutil.copytree(ROOT / ".claude/rules-library", waived.dir / ".claude/rules-library")
+        waived.env.update(self.repo.env, CLAUDE_PROJECT_DIR=str(waived.dir))
+        self.reports(waived)
+        for args in (["--fix"], ["--fix", "--all"]):
+            r = waived.run("run-wave", "1", "WP-02", *args)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("FLOOR-ONE", self.prompt())
+            self.assertNotIn("REFLEX-ONE", self.prompt(), args)
+
+    def test_the_plan_and_run_wave_print_the_rules(self):
+        import findings
+        repo = Repo(dict(MANIFEST, stack=["python"]))
+        self.addCleanup(repo.cleanup)
+        shutil.copytree(ROOT / ".claude/rules-library", repo.dir / ".claude/rules-library")
+        self.assertEqual(repo.run("rules-sync").returncode, 0)
+        plan = json.loads(repo.run("pipeline-plan").stdout.splitlines()[-1])
+        text = plan["rules_text"]
+        self.assertTrue(text.startswith("\nRules you must follow (common and language). They are printed here, "
+                                        "so do not read them from disk:"), text[:200])
+        self.assertIn("--- .claude/rules/agentic/common.md ---", text)
+        self.assertIn(RULE, text)
+        self.assertNotIn("paths:", text)
+        self.assertEqual(plan["rules_sum"], findings.text_sum(text))
+        repo.env.update(self.repo.env, CLAUDE_PROJECT_DIR=str(repo.dir))
+        self.assertEqual(repo.run("run-wave", "1").returncode, 0)
+        self.assertIn(RULE, self.calls("WP-01")[-1]["prompt"])
+        self.assertEqual(json.loads(self.repo.run("pipeline-plan").stdout.splitlines()[-1])["rules_text"], "")
+
+    def test_run_review_starts_both_reviewers(self):
+        r = self.repo.run("run-review")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(sorted(c["agent"] for c in self.calls()), ["reviewer", "standards-reviewer"])
+        for name in ("REVIEW.json", "STANDARDS.json"):
+            self.assertTrue((self.runs / name).is_file(), name)
+        self.assertIn("REVIEW:", r.stdout)
+        self.assertIn("STANDARDS:", r.stdout)
+        self.assertIn("REVIEW", self.ledger())
+        self.assertIn("STANDARDS", self.ledger())
+
+
+class ResumingAgentTests(unittest.TestCase):
+    """launch.resuming: the fallback engine's agent callable, over a recorded launch."""
+
+    def setUp(self):
+        self.launched, self.answers = [], []
+
+    def launch(self, prompt, agent_type, label, ident, **opts):
+        self.launched.append((ident, opts))
+        report, sid = self.answers.pop(0) if self.answers else ({"status": "DONE"}, f"s-{len(self.launched)}")
+        return {"report": report, "status": "DONE" if report else "NO REPORT", "usage": {}, "session_id": sid}
+
+    def test_a_fix_attempt_continues_its_own_package_session(self):
+        agent = launch.resuming(self.launch, {"WP-01", "WP-02"})
+        agent("p", "implementer", "WP-01", "WP-01")
+        agent("p", "implementer", "WP-02", "WP-02")
+        agent("p", "implementer", "WP-01 (fix)", "WP-01", resume=True)
+        self.assertEqual(self.launched[2], ("WP-01", {"resume": "s-1", "model": None, "schema_name": None}))
+
+    def test_without_a_session_or_with_a_model_the_call_is_fresh(self):
+        agent = launch.resuming(self.launch, {"WP-01"})
+        agent("p", "implementer", "WP-01 (fix)", "WP-01", resume=True)
+        agent("p", "implementer", "WP-01 (fix)", "WP-01", model="opus")
+        agent("p", "reviewer", "reviewer (re-review)", "REVIEW", schema="re-review")
+        self.assertEqual([o for _, o in self.launched], [
+            {"model": None, "schema_name": None}, {"model": "opus", "schema_name": None},
+            {"model": None, "schema_name": "re-review"}])
+
+    def test_a_resumed_call_with_no_report_is_retried_fresh_once(self):
+        agent = launch.resuming(self.launch, {"WP-01"})
+        agent("p", "implementer", "WP-01", "WP-01")
+        self.answers = [(None, "s-x"), (None, None)]
+        self.assertIsNone(agent("p", "implementer", "WP-01 (fix)", "WP-01", resume=True))
+        self.assertEqual([("resume" in o) for _, o in self.launched], [False, True, False])
+
+    def test_only_package_sessions_are_kept(self):
+        agent = launch.resuming(self.launch, {"WP-01"})
+        agent("p", "reviewer", "reviewer", "REVIEW")
+        agent("p", "reviewer", "reviewer", "REVIEW", resume=True)
+        self.assertNotIn("resume", self.launched[1][1])
+
+
+class PlanConfigTests(unittest.TestCase):
+    """pipeline-plan's escalation_model and max_agent_calls, and the configuration it refuses."""
+
+    def plan(self, config=None):
+        repo = Repo()
+        self.addCleanup(repo.cleanup)
+        if config is not None:
+            repo.write(".claude/agentic.json", json.dumps(config))
+        return repo.run("pipeline-plan")
+
+    def test_the_defaults_escalate_and_have_no_budget(self):
+        plan = json.loads(self.plan().stdout.splitlines()[-1])
+        self.assertEqual((plan["escalation_model"], plan["max_agent_calls"]), ("opus", None))
+
+    def test_a_budget_and_escalation_off_reach_the_plan(self):
+        plan = json.loads(self.plan({"max_agent_calls": 1, "escalation": False}).stdout.splitlines()[-1])
+        self.assertEqual((plan["escalation_model"], plan["max_agent_calls"]), (None, 1))
+
+    def test_bad_values_are_refused(self):
+        for config in ({"max_agent_calls": 0}, {"max_agent_calls": -3}, {"max_agent_calls": 2.5},
+                       {"max_agent_calls": False}, {"escalation": None}, {"escalation": 1}):
+            with self.subTest(config=config):
+                r = self.plan(config)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("agentic.json: ", r.stderr)
+                self.assertEqual(r.stdout, "")
 
 
 
