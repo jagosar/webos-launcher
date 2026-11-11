@@ -95,6 +95,13 @@ Some claims the code alone cannot settle. They go in `needs_validation`, not in 
 
 Each item names the `claim` (what would be wrong if the fact holds), the exact missing `fact`, and `how_to_check` it in one safe step. It carries no severity, and it never blocks: the person checks the fact.
 
+# Re-review
+
+When your prompt is a re-review, it gives the findings confirmed before a fix, each with its `fingerprint`, and the diffs of that fix. Judge only those fingerprints, on your axis, against the diffs and the code they changed:
+- **ADDRESSED** needs the line that shows the finding is gone, quoted in `evidence`. When you cannot point to it, the verdict is NOT_ADDRESSED.
+- Give one verdict per fingerprint, copied exactly; `status` is `FAIL` when any verdict is NOT_ADDRESSED.
+- Anything else you see goes to `new_findings`, with its `tier`: it is recorded for a person and does not reopen the fix.
+
 # Report (final answer, under 400 words)
 
 JSON that follows the schema your launcher gives you: `status` (`FAIL` only if there is a critical or high finding with proof, else `PASS`); `findings`, each with `tier`, `severity`, `provenance`, `wp`, `file`, `line`, `problem`, `evidence`, `fix` and `if_skipped`; `needs_validation` (the list above, or `[]`); and `not_checked` (what you did not check, skipped, or see as a risk; `[]` when nothing).

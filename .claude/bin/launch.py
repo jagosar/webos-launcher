@@ -67,14 +67,28 @@ def usage_of(path):
             "cache_read": u.get("cache_read_input_tokens") or 0, "output": u.get("output_tokens") or 0,
             "cost_usd": data.get("total_cost_usd"), "turns": data.get("num_turns") or 0}
 
-def run_agent(manifest, cfg, spec, agent_type, ident, label, prompt, out_path, final=False, entity=None):
-    """One `claude -p` run with the agent's JSON schema. Returns {"report", "status", "usage"} and never raises.
-    `final`: also write the end state in the ledger (the one-off commands; the pipeline's close-stage does it there).
-    `entity`: the zone the hook judges it by, when it is not `ident` (the standards reviewer runs as REVIEW)."""
-    schema = spec["schemas"].get(agent_type, spec["schemas"]["implementer"])
+def session_of(path):
+    """The session id a `claude -p --output-format json` output names, or None."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    sid = data.get("session_id") if isinstance(data, dict) else None
+    return sid if isinstance(sid, str) and sid else None
+
+def run_agent(manifest, cfg, spec, agent_type, ident, label, prompt, out_path, final=False, entity=None,
+              model=None, resume=None, schema_name=None):
+    """One `claude -p` run with the agent's JSON schema. Returns {"report", "status", "usage", "session_id"} and never
+    raises. `final`: also write the end state in the ledger (the one-off commands; the pipeline's close-stage does it
+    there). `entity`: the zone the hook judges it by, when it is not `ident` (the standards reviewer runs as REVIEW).
+    `model`: instead of WORKER_MODEL (an escalated fix attempt); `resume`: the session id to continue; `schema_name`:
+    the schema, when it is not the agent type's (a re-review). The spec's advisor_model, when set, goes as --advisor."""
+    schema = spec["schemas"].get(schema_name or agent_type, spec["schemas"]["implementer"])
+    advisor = spec["constants"].get("advisor_model")
     # The prompt goes on stdin: on Windows a `claude.cmd` would pass it through cmd.exe, which cuts newlines.
     cmd = compat.resolve(shlex.split(os.environ.get("AGENTIC_CLAUDE", "claude"))) + [
-        "-p", "--agent", agent_type, "--model", WORKER_MODEL, "--output-format", "json",
+        "-p", *(["--resume", resume] if resume else []), "--agent", agent_type, "--model", model or WORKER_MODEL,
+        *(["--advisor", advisor] if advisor else []), "--output-format", "json",
         "--json-schema", json.dumps(schema, separators=(",", ":")), "--permission-mode", "acceptEdits",
         "--strict-mcp-config", "--allowedTools", *pipeline_tools(manifest, agent_type),
         "Bash(python3 .claude/bin/agentic.py claim:*)"]
@@ -109,7 +123,7 @@ def run_agent(manifest, cfg, spec, agent_type, ident, label, prompt, out_path, f
     if final and tracked:
         ledger_update(ident, state=status_to_state(status), pid=None, note=status)
     print(f"{label}: {status}", flush=True)
-    return {"report": report, "status": status, "usage": usage}
+    return {"report": report, "status": status, "usage": usage, "session_id": session_of(out_path)}
 
 def write_briefs(manifest):
     """The slice of architecture.md each WP (and the test-author, "AT") needs, in .claude/state/briefs/."""
@@ -402,6 +416,23 @@ def pipeline_module():
 def brief_module():
     return sibling("brief")
 
+def resuming(launch, packages):
+    """The engine's agent callable over launch(prompt, agent_type, label, ident, **run_agent options) -> run_agent's
+    result. It keeps the last session of each package; a call with resume=True continues it, and when the resumed
+    agent gives no report, one fresh agent runs instead: a stale session must not cost the attempt."""
+    sessions = {}
+
+    def agent(prompt, agent_type, label, ident, model=None, resume=False, schema=None):
+        opts = {"model": model, "schema_name": schema}
+        res = launch(prompt, agent_type, label, ident, resume=sessions[ident], **opts) \
+            if resume and sessions.get(ident) else None
+        if not (res and res["report"]):
+            res = launch(prompt, agent_type, label, ident, **opts)
+        if ident in packages and res["session_id"]:
+            sessions[ident] = res["session_id"]
+        return res["report"]
+    return agent
+
 def run_pipeline(manifest, args):
     """run-pipeline [--start-wave N] [--resume]: the agentic-implement pipeline with one `claude -p` per agent. The
     same stages, prompts, schemas and limits as the native workflow; it only changes who runs the agents."""
@@ -432,12 +463,13 @@ def run_pipeline(manifest, args):
         ok, results = run_steps([shlex.split(c) for c in cmds], env=gate_env)
         return {"steps": results}
 
-    def agent(prompt, agent_type, label, ident):
+    def launch(prompt, agent_type, label, ident, **opts):
         res = run_agent(manifest, cfg, spec, agent_type, ident, label, prompt,
-                        STATE / "runs" / f"{ident or agent_type}-{next(counter)}.json")
+                        STATE / "runs" / f"{ident or agent_type}-{next(counter)}.json", **opts)
         if res["status"] == "STOPPED":
             raise pipeline.Halted()
-        return res["report"]
+        return res
+    agent = resuming(launch, set(wps(manifest)))
 
     def wave_done(wave):
         completed.append(wave)
@@ -459,17 +491,33 @@ def architecture_type():
     m = TYPE_RE.search(ARCH.read_text(encoding="utf-8")) if ARCH.exists() else None
     return m.group(1).lower() if m else None
 
+CALLS_ERROR = "agentic.json: max_agent_calls must be a whole number of agent calls (1 or more), or null"
+ESCALATION_ERROR = "agentic.json: escalation must be true or false"
+
+def checked_config():
+    """The configuration, with the keys the engines follow checked (exit 1 with the reason)."""
+    cfg = load_config()
+    calls = cfg.get("max_agent_calls")
+    if calls is not None and (isinstance(calls, bool) or not isinstance(calls, int) or calls < 1):
+        die(CALLS_ERROR)
+    if not isinstance(cfg.get("escalation", True), bool):
+        die(ESCALATION_ERROR)
+    return cfg
+
 def pipeline_plan(manifest):
     """The plan the engines follow, as one JSON line."""
+    cfg, constants = checked_config(), load_spec()["constants"]
     waves = sorted({wp["wave"] for wp in wps(manifest).values()})
     printed = rules_text(manifest)
     plan = {"waves": waves, "acceptance": bool(at_entity(manifest)["command"]), "type": architecture_type(),
-            "verify": sorted(manifest.get("verify", {})), "max_fix_cycles": int(load_config().get("max_fix_cycles", 2)),
+            "verify": sorted(manifest.get("verify", {})), "max_fix_cycles": int(cfg.get("max_fix_cycles", 2)),
             "agents": {wp["id"]: wp.get("agent", "implementer") for wp in wps(manifest).values()},
             "baseline": bool(manifest.get("verify")),
             "docs": bool(docs_entity(manifest)), "codemap": codemap_path(manifest), "rules": rule_files(manifest),
             "rules_text": printed, "rules_sum": text_sum(printed), "waivers": manifest.get("waivers") or [],
-            "implementer_rules": load_spec()["constants"].get("implementer_rules") is not False,
+            "implementer_rules": constants.get("implementer_rules") is not False,
+            "escalation_model": constants.get("escalation_model") if cfg.get("escalation", True) else None,
+            "max_agent_calls": cfg.get("max_agent_calls"),
             "wave_of": {wp["id"]: wp["wave"] for wp in wps(manifest).values()},
             "work_packages": {str(w): sorted(wp["id"] for wp in stage_owners(manifest, str(w))) for w in waves}}
     print(json.dumps(plan))

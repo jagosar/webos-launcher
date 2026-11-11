@@ -46,15 +46,18 @@ def claude_command(fake_py) -> str:
 #   FAKE_CONCERNS  implementers answer DONE_WITH_CONCERNS with one concern;  FAKE_NEEDS_CONTEXT  a WP: it answers
 #   NEEDS_CONTEXT on its first call only
 #   whose schema requires not_checked says ["nothing else"]
+#   FAKE_RE_REVIEW  the verdict a re-review gives every fingerprint of its prompt (default ADDRESSED)
+#   FAKE_RESUME_FAILS  a call with --resume answers nothing
+# Every answer names the session "s-<the fake's process id>"; the log records that pid.
 FAKE_CLAUDE = """\
-import json, os, sys, time
+import json, os, re, sys, time
 argv = sys.argv[1:]
 prompt = sys.stdin.buffer.read().decode("utf-8")
 agent = argv[argv.index("--agent") + 1]
 ident = os.environ.get("AGENTIC_WP")
 start = time.time_ns()
 log = os.path.join(os.environ["FAKE_LOG_DIR"], f"call-{start}-{os.getpid()}.json")
-call = {"t": start, "agent": agent, "id": ident, "argv": argv, "prompt": prompt,
+call = {"t": start, "pid": os.getpid(), "agent": agent, "id": ident, "argv": argv, "prompt": prompt,
         "env": {k: os.environ.get(k) for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
                                                "CLAUDE_CODE_DISABLE_CLAUDE_MDS", "CLAUDE_CODE_DISABLE_AUTO_MEMORY")}}
 def save():
@@ -65,6 +68,8 @@ time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
 call["end"] = time.time_ns()
 save()
 mode = os.environ.get("FAKE_MODE", "structured")
+if "--resume" in argv and os.environ.get("FAKE_RESUME_FAILS"):
+    sys.exit(0)
 if mode == "text":
     print(json.dumps({"result": "STATUS: DONE"}))
     sys.exit(0)
@@ -111,7 +116,13 @@ if agent == "standards-reviewer":
 if os.environ.get("FAKE_NOT_CHECKED"):
     values["not_checked"] = ["nothing else"]
 required = json.loads(argv[argv.index("--json-schema") + 1]).get("required", [])
-out = {"type": "result", "structured_output": {k: values.get(k, []) for k in required}}
+if "verdicts" in required:
+    verdict = os.environ.get("FAKE_RE_REVIEW", "ADDRESSED")
+    values.update(status="PASS" if verdict == "ADDRESSED" else "FAIL", verdicts=[
+        {"fingerprint": fp, "verdict": verdict, "evidence": "line 1"}
+        for fp in re.findall(r'"fingerprint":"(F[0-9a-f]{8}(?:-\\d+)?)"', prompt)])
+out = {"type": "result", "session_id": f"s-{os.getpid()}",
+       "structured_output": {k: values.get(k, []) for k in required}}
 if mode == "structured":
     out.update(usage={"input_tokens": 100, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 300,
                       "output_tokens": 50}, total_cost_usd=0.01, num_turns=3)

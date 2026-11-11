@@ -153,6 +153,18 @@ NOTES = {
         "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
         "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
     ],
+    "2.14.0": [
+        "The last allowed fix attempt of a package (attempt 2 or later) runs on Opus, the spec's escalation_model, "
+        "in both engines; escalation: false in .claude/agentic.json turns it off. The prompt does not change.",
+        "The fallback engine's other fix attempts continue the implementer's own session (claude -p --resume); a "
+        "resumed call that gives no report is retried once, fresh. The native workflow cannot resume and starts fresh.",
+        "Every finding gets a fingerprint, stable across reviews. After a fix, each axis runs a re-review of its open "
+        "findings only, against the fix's diffs: ADDRESSED or NOT_ADDRESSED per fingerprint (a missing verdict is "
+        "NOT_ADDRESSED), no verifier. Anything new goes to pending as a new finding and never starts a fix cycle.",
+        "max_agent_calls in .claude/agentic.json (default none) caps the model agent calls of a run: it is checked "
+        "before the run and before each fix cycle, with the review and QA after it reserved; the run records "
+        "agent_calls. The reviewers and the implementer gain a few lines (re-review, resumed attempts).",
+    ],
     "2.13.0": [
         "The review has two axes, in parallel and never reranked: reviewer.md is now the Spec axis (contracts, "
         "correctness, security, callers) and a new standards-reviewer.md the Standards axis (section 7 and the rules). "

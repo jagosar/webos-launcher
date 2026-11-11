@@ -1,12 +1,18 @@
 """Findings: the tier of a judge's finding, the plan's waivers, and whether a finding blocks.
 
 One scale for every judge (both reviewers, QA, the test-auditor): floor never ships, reflex (a breach of a written
-rule) blocks unless a waiver of the plan covers it, finish never blocks. A finding with no tier keeps the meaning it
+rule) blocks unless a waiver of the plan covers it, finish never blocks. A fingerprint names a finding across
+reviews, so a re-review can say whether a fix addressed it. A finding with no tier keeps the meaning it
 had before tiers existed: it blocks when its severity is one of the blocking ones. Pure functions, no imports from the
 flow, so the bench and the engines' tests can load this module alone.
 """
 TIERS = ("floor", "reflex", "finish")
 SUM_MODULUS = 1000000007
+FNV_OFFSET = 2166136261
+FNV_PRIME = 16777619
+HASH_MASK = 0xFFFFFFFF
+PROBLEM_CHARS = 80
+FINGERPRINT_PARTS = ("axis", "tier", "rule", "file")
 
 
 def tier_of(item, blocking):
@@ -59,3 +65,30 @@ def text_sum(text):
     for ch in text:
         total = (total + ord(ch)) % SUM_MODULUS
     return total
+
+
+def _part(finding, key):
+    value = finding.get(key)
+    return "" if value is None else str(value)
+
+
+def fingerprint(finding):
+    """"F" + 8 hex digits of FNV-1a (32-bit) over the code points of "<axis>|<tier>|<rule>|<file>|<problem>": the
+    problem stripped of " \\t\\r\\n", lowered with str.lower() (as JS toLowerCase) and cut to its first 80 code points.
+    The line and the evidence are left out: they change between reviews of the same finding."""
+    problem = _part(finding, "problem").strip(" \t\r\n").lower()[:PROBLEM_CHARS]
+    text = "|".join([_part(finding, k) for k in FINGERPRINT_PARTS] + [problem])
+    h = FNV_OFFSET
+    for ch in text:
+        h = ((h ^ ord(ch)) * FNV_PRIME) & HASH_MASK
+    return f"F{h:08x}"
+
+
+def with_fingerprints(findings):
+    """Copies of the findings, each with "fingerprint"; the second and later of a repeated value get "-2", "-3"."""
+    seen, out = {}, []
+    for f in findings:
+        fp = fingerprint(f)
+        seen[fp] = seen.get(fp, 0) + 1
+        out.append({**f, "fingerprint": fp if seen[fp] == 1 else f"{fp}-{seen[fp]}"})
+    return out

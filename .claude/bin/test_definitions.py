@@ -594,5 +594,66 @@ class MovedDefinitionTests(unittest.TestCase):
         self.assertIn("agentic.py hooks-check", steps[0])
         self.assertTrue(any("agentic.py validate" in s for s in steps[1:]))
 
+class ReviewDefinitionTests(unittest.TestCase):
+    """The two review axes, the tiers, the provenance and the re-review, in the definitions that carry them."""
+
+    def read(self, rel):
+        return (CLAUDE / rel).read_text(encoding="utf-8")
+
+    def test_the_reviewers_carry_tiers_rules_and_the_re_review(self):
+        reviewer = self.read("agents/reviewer.md")
+        for phrase in ("# Tiers", "`tier`", "`provenance`", "the Standards axis", "# Re-review", "ADDRESSED",
+                       "NOT_ADDRESSED", "`new_findings`", "`fingerprint`"):
+            self.assertIn(phrase, reviewer)
+        self.assertNotIn("breaches of section 7", reviewer)
+        standards = self.read("agents/standards-reviewer.md")
+        for phrase in ("# Tiers", "reflex", "`rule`", "the rule's opening words", "Never report a floor",
+                       "No concrete case, no finding", "# Re-review", "ADDRESSED", "`new_findings`"):
+            self.assertIn(phrase, standards)
+        head = standards.split("---")[1]
+        self.assertIn("model: sonnet", head)
+        tools = {t.strip() for t in head.split("tools:")[1].splitlines()[0].split(",")}
+        self.assertEqual(tools, {"Read", "Glob", "Grep", "Bash", "StructuredOutput"})
+
+    def test_judges_verifier_and_planners_carry_tiers_and_provenance(self):
+        for name in ("qa.md", "test-auditor.md"):
+            text = self.read("agents/" + name)
+            for phrase in ("`tier`", "floor", "finish"):
+                self.assertIn(phrase, text, name)
+        verifier = self.read("agents/verifier.md")
+        self.assertIn("inferred", verifier)
+        self.assertIn("Uncertainty never downgrades a blocker", verifier)
+        plan_reviewer = self.read("agents/plan-reviewer.md")
+        self.assertLess(plan_reviewer.index("inferred"), plan_reviewer.index("blind implementer"))
+        self.assertIn("waivers", plan_reviewer)
+        architect = self.read("commands/architect.md")
+        for phrase in ("| Source |", "read", "inferred", "`waivers`"):
+            self.assertIn(phrase, architect)
+        implement = self.read("commands/implement.md")
+        for phrase in ("Spec", "Standards", "waived"):
+            self.assertIn(phrase, implement)
+
+    def test_writers_follow_the_printed_rules_and_fix_attempts_read_the_last_diff(self):
+        for name in ("implementer.md", "test-author.md", "qa.md"):
+            self.assertIn("the rules printed in your prompt", self.read("agents/" + name), name)
+        for path in sorted(AGENTS_DIR.glob("*.md")):
+            self.assertNotIn("the rules your prompt points to", path.read_text(encoding="utf-8"), path.name)
+        self.assertIn("continue your earlier session or start fresh", self.read("agents/implementer.md"))
+
+    def test_the_spec_carries_the_re_review_and_the_model_constants(self):
+        spec = json.loads(self.read("workflows/pipeline-spec.json"))
+        self.assertEqual(spec["constants"]["escalation_model"], "opus")
+        self.assertIsNone(spec["constants"]["advisor_model"])
+        prompt = spec["prompts"]["re_review"]
+        for name in ("{axis}", "{findings}", "{diffs}", "{rules}"):
+            self.assertIn(name, prompt)
+        schema = spec["schemas"]["re-review"]
+        self.assertEqual(schema["required"], ["status", "verdicts", "new_findings", "not_checked"])
+        verdict = schema["properties"]["verdicts"]["items"]
+        self.assertEqual(verdict["properties"]["verdict"]["enum"], ["ADDRESSED", "NOT_ADDRESSED"])
+        self.assertEqual(schema["properties"]["new_findings"]["items"]["required"],
+                         ["tier", "wp", "file", "problem", "evidence"])
+
+
 if __name__ == "__main__":
     unittest.main()

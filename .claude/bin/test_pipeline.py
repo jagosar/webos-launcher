@@ -7,6 +7,7 @@ End to end: `run-pipeline` against a temporary git repo with a fake `claude`; no
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,7 +29,7 @@ SPEC = json.loads((WORKFLOWS / "pipeline-spec.json").read_text(encoding="utf-8")
 def world(decl):
     """The simulated world of one scenario: the same defaults and overrides that test_workflow.mjs builds."""
     state = {"gate_calls": 0, "gates": [], "calls": [], "verifies": 0, "reviews": 0, "standards": 0, "qas": 0,
-             "audits": 0}
+             "audits": 0, "re_reviews": {}}
     base = CONFORMANCE["plan"]
 
     def text(o):
@@ -81,8 +82,10 @@ def world(decl):
         extra = reports.get(key)
         return {**report, **extra} if extra else report
 
-    def agent(prompt, agent_type, label, ident):
-        state["calls"].append((agent_type, label, prompt))
+    def agent(prompt, agent_type, label, ident, **opts):
+        state["calls"].append((agent_type, label, prompt, opts))
+        if opts.get("schema") == "re-review":
+            return re_review(decl, state, agent_type, prompt)
         if agent_type == "test-author":
             return decl.get("test_author") or {"status": "DONE", "coverage": [{"ac": "AC-001", "tests": ["test_ac_001"]}], "blocker": None}
         if agent_type == "test-auditor":
@@ -117,13 +120,33 @@ def world(decl):
     return state, gate, agent
 
 
+FINGERPRINT_IN_PROMPT = re.compile(r'"fingerprint":"(F[0-9a-f]{8}(?:-\d+)?)"')
+
+
+def re_review(decl, state, agent_type, prompt):
+    """A re-review report: the declared entry of this call (the last one repeats; default ADDRESSED) gives one verdict
+    to every fingerprint of the prompt, or none when its verdict is null; a null entry is no report."""
+    n = state["re_reviews"][agent_type] = state["re_reviews"].get(agent_type, 0) + 1
+    entries = (decl.get("re_review") or {}).get(agent_type) or [{"verdict": "ADDRESSED"}]
+    entry = entries[min(n, len(entries)) - 1]
+    if entry is None:
+        return None
+    verdict = entry.get("verdict")
+    verdicts = [] if verdict is None else [{"fingerprint": fp, "verdict": verdict, "evidence": "line 3"}
+                                           for fp in FINGERPRINT_IN_PROMPT.findall(prompt)]
+    return {"status": "FAIL" if verdict == "NOT_ADDRESSED" else "PASS", "verdicts": verdicts,
+            "new_findings": entry.get("new_findings") or [], "not_checked": []}
+
+
 def summarize(result, state):
-    seen, prompts, agents = {}, {}, []
-    for agent_type, label, prompt in state["calls"]:
+    seen, prompts, agents, models = {}, {}, [], []
+    for agent_type, label, prompt, opts in state["calls"]:
         key = f"{agent_type}:{label}"
         seen[key] = seen.get(key, 0) + 1
         prompts[f"{key}#{seen[key]}"] = prompt
         agents.append(key)
+        if opts.get("model"):
+            models.append(f"{key}#{seen[key]}={opts['model']}")
     return {"result": result["result"], "failed_stage": result.get("failed_stage"), "detail": result.get("detail"),
             "fix_cycles": result["fix_cycles"],
             "pending": sorted(p.get("type") for p in result.get("pending", [])), "gates": state["gates"],
@@ -132,7 +155,18 @@ def summarize(result, state):
             "gate_denials": result.get("gate_denials", {}),
             "review_callers": (result.get("review") or {}).get("callers", 0),
             "review_axes": review_axes(result.get("review")), "rules": result.get("rules"),
-            "verification_failures": len(result.get("verification_failures") or [])}
+            "verification_failures": len(result.get("verification_failures") or []),
+            "agent_calls": result.get("agent_calls"), "models": sorted(models), "re_review": re_review_counts(result)}
+
+
+def re_review_counts(result):
+    """[addressed, still confirmed, new] per axis of the last review when it was a re-review; None otherwise."""
+    review = result.get("review") or {}
+    if not review.get("scoped"):
+        return None
+    return {axis: [len(review[axis].get("addressed") or []), len(review[axis].get("confirmed") or []),
+                   len([f for f in review.get("new") or [] if f.get("axis") == axis])]
+            for axis in ("spec", "standards")}
 
 
 def review_axes(review):
@@ -167,7 +201,8 @@ class ConformanceTests(unittest.TestCase):
             with self.subTest(scenario=decl["name"]):
                 mine, theirs = run_scenario(decl), self.workflow[decl["name"]]
                 keys = ("result", "failed_stage", "detail", "fix_cycles", "pending", "gates", "gate_calls", "agents",
-                        "not_checked", "gate_denials", "review_callers", "verification_failures", "review_axes", "rules")
+                        "not_checked", "gate_denials", "review_callers", "verification_failures", "review_axes", "rules",
+                        "agent_calls", "models", "re_review")
                 for key in keys:
                     self.assertEqual(mine[key], theirs[key], key)
                 self.assertEqual(mine["prompts"], theirs["prompts"], "the agents must receive the same prompts")
@@ -354,6 +389,129 @@ class EngineRecordTests(unittest.TestCase):
         self.assertEqual((s["result"], s["failed_stage"], s["gates"], s["agents"]),
                          ("REVIEW", "prepare", ["hooks-check"], []))
         self.assertIn("guardrail hook is not running", s["detail"])
+
+def by_name(name):
+    return run_scenario(next(d for d in CONFORMANCE["scenarios"] if d["name"] == name))
+
+
+def prompts_of(summary, agent):
+    return [p for k, p in summary["prompts"].items() if k.startswith(agent + ":")]
+
+
+class ReviewAxesTests(unittest.TestCase):
+    """From test_acceptance_v213 ac_001, ac_002, ac_006 and ac_009: the two axes and their tiers, the printed rules,
+    and the implementer left without them; and the review after a fix, scoped to the findings it was meant to close."""
+
+    def test_the_two_axes_keep_separate_lists_and_fixes(self):
+        s = by_name("the two axes keep separate lists")
+        self.assertEqual((s["result"], s["fix_cycles"]), ("OK", 1))
+        fix1 = [p for k, p in s["prompts"].items() if k.startswith("implementer:WP-01") and "Fix WP-01" in p]
+        fix2 = [p for k, p in s["prompts"].items() if k.startswith("implementer:WP-02") and "Fix WP-02" in p]
+        self.assertTrue(fix1 and fix2, s["prompts"].keys())
+        self.assertIn('"axis":"spec"', fix1[0])
+        self.assertNotIn('"axis":"standards"', fix1[0])
+        self.assertIn('"axis":"standards"', fix2[0])
+        self.assertNotIn('"axis":"spec"', fix2[0])
+        self.assertEqual(s["re_review"], {"spec": [1, 0, 0], "standards": [1, 0, 0]}, "each axis re-reviews its own")
+
+    def test_tiers_decide_what_blocks(self):
+        reflex = by_name("a reflex finding blocks until it is fixed")
+        self.assertEqual((reflex["result"], reflex["fix_cycles"]), ("OK", 1))
+        waived = by_name("a waived reflex finding does not block and is recorded")
+        self.assertEqual((waived["result"], waived["fix_cycles"]), ("OK", 0))
+        self.assertFalse([a for a in waived["agents"] if a.startswith("verifier:")])
+        self.assertEqual(waived["review_axes"]["standards"], [0, 0, 0, 1])
+        finish = by_name("a finish finding never blocks")
+        self.assertEqual(finish["result"], "OK")
+        self.assertFalse([a for a in finish["agents"] if a.startswith("verifier:")])
+        self.assertEqual(finish["review_axes"]["spec"], [0, 0, 1])
+        missing = by_name("the standards reviewer returned no report")
+        self.assertEqual((missing["result"], missing["failed_stage"]), ("REVIEW", "review"))
+
+    def test_printed_rules_reach_the_writers_and_judges_only(self):
+        printed = by_name("printed rules reach the agents")
+        self.assertEqual(printed["rules"], "printed")
+        for agent in ("implementer", "reviewer", "standards-reviewer"):
+            self.assertTrue(all("RULE-TEXT" in p for p in prompts_of(printed, agent)), agent)
+        for agent in ("gatekeeper", "verifier"):
+            self.assertFalse([p for p in prompts_of(printed, agent) if "RULE-TEXT" in p or "Rules you must" in p])
+        damaged = by_name("rules text that arrives damaged falls back to the paths")
+        self.assertEqual(damaged["rules"], "pointed")
+        for agent in ("implementer", "reviewer", "standards-reviewer"):
+            for p in prompts_of(damaged, agent):
+                self.assertIn("Rules you must follow (language and common): .claude/rules/agentic/common.md", p)
+                self.assertNotIn("RULE-TEXT", p)
+        bare = by_name("the implementer can be left without the rules")
+        self.assertTrue(prompts_of(bare, "implementer"))
+        self.assertFalse([p for p in prompts_of(bare, "implementer") if "RULE-TEXT" in p])
+        for agent in ("reviewer", "standards-reviewer"):
+            self.assertTrue(all("RULE-TEXT" in p for p in prompts_of(bare, agent)), agent)
+
+    def test_the_review_after_a_fix_is_scoped_and_never_verified(self):
+        s = by_name("a fix is re-reviewed on its open findings only")
+        self.assertEqual(s["agents"].count("reviewer:reviewer (re-review)"), 1)
+        self.assertNotIn("standards-reviewer:standards-reviewer (re-review)", s["agents"])
+        self.assertEqual(len([a for a in s["agents"] if a.startswith("verifier:")]), 1)
+        prompt = s["prompts"]["reviewer:reviewer (re-review)#1"]
+        self.assertTrue(prompt.startswith("Re-review the fix, on the Spec axis only."), prompt[:80])
+        self.assertIn(".claude/state/runs/WP-01.fix-1.diff", prompt)
+        qa_only = by_name("a defect that does not get fixed is capped")
+        self.assertFalse([a for a in qa_only["agents"] if "re-review" in a], "nothing open: no re-review call")
+        self.assertEqual(qa_only["agents"].count("reviewer:reviewer"), 1)
+
+    def test_verdicts_new_findings_and_findings_outside_the_fix(self):
+        for name in ("a finding not addressed is fixed again", "a missing verdict counts as not addressed"):
+            s = by_name(name)
+            self.assertEqual((s["result"], s["fix_cycles"], s["re_review"]["spec"]), ("REVIEW", 2, [0, 1, 0]), name)
+        new = by_name("a new finding in a re-review goes to pending")
+        self.assertEqual((new["result"], new["fix_cycles"], new["pending"]), ("REVIEW", 1, ["new finding"]))
+        outside = by_name("a finding outside every package survives the re-review")
+        self.assertEqual((outside["result"], outside["pending"], outside["re_review"]["spec"]),
+                         ("REVIEW", ["no WP"], [1, 1, 0]))
+        lost = by_name("a re-review that returns no report stops the run")
+        self.assertEqual((lost["result"], lost["failed_stage"], lost["detail"]),
+                         ("REVIEW", "review", "the reviewer returned no re-review report"))
+
+    def test_the_last_attempt_escalates_and_budgets_stop_with_their_reason(self):
+        self.assertEqual(by_name("the last fix attempt escalates")["models"], ["implementer:WP-03 (fix)#2=opus"])
+        self.assertEqual(by_name("without an escalation model no attempt escalates")["models"], [])
+        small = by_name("a budget too small for the run stops before any agent")
+        self.assertEqual((small["failed_stage"], small["agents"], small["agent_calls"]), ("budget", [], 0))
+        gap = by_name("a budget that cannot fund a fix cycle stops with the gap")
+        self.assertEqual((gap["failed_stage"], gap["fix_cycles"], gap["pending"]), ("budget", 0, ["over budget"]))
+        self.assertIn("3 needed, 2 left", gap["detail"])
+        self.assertEqual(by_name("no budget runs as before")["agent_calls"], 12)
+
+
+class CallOptionTests(unittest.TestCase):
+    """Pipeline.call passes only the options a call sets, and counts every call, a failed one too."""
+
+    def test_a_four_parameter_agent_still_runs_a_run_without_fixes(self):
+        state, gate, agent = world({"name": "four"})
+        engine = pipeline.Pipeline(SPEC, gate, lambda p, t, l, i: agent(p, t, l, i),
+                                   parallel=lambda thunks: [t() for t in thunks])
+        result = engine.execute()
+        self.assertEqual((result["result"], result["agent_calls"]), ("OK", len(state["calls"])))
+
+    def test_a_call_that_blows_up_is_still_counted(self):
+        def boom(*args, **opts):
+            raise RuntimeError("dead")
+        engine = pipeline.Pipeline(SPEC, lambda c, l: None, boom)
+        self.assertIsNone(engine.call("qa", "qa", "p", "QA", model="opus"))
+        self.assertEqual(engine.run["agent_calls"], 1)
+
+    def test_fix_attempts_resume_until_the_last_one_escalates(self):
+        engine = pipeline.Pipeline(SPEC, lambda c, l: None, lambda *a, **o: None)
+        engine.plan = {"max_fix_cycles": 3, "escalation_model": "opus"}
+        options = []
+        for count in range(3):
+            engine.fix_count["WP-01"] = count
+            options.append(engine.attempt_options("WP-01"))
+        self.assertEqual(options, [{"resume": True}, {"resume": True}, {"model": "opus"}])
+        engine.plan["max_fix_cycles"] = 1
+        engine.fix_count["WP-01"] = 0
+        self.assertEqual(engine.attempt_options("WP-01"), {"resume": True}, "a single attempt is not escalated")
+
 
 E2E_MANIFEST = {
     "allow_bash": ["Bash(python3 -m unittest:*)"],

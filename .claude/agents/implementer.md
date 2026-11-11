@@ -63,6 +63,7 @@ A hook blocks any write outside your WP's files, and any git, dependency-install
 4. Write the tests section 9 asks for your WP.
 5. If the manifest has `acceptance`, run its `command` and get the tests of your WP's ACs green. Those tests are the judge: **you cannot modify them** (the hook prevents it) and you must not adapt your code to an internal detail of a test. If an acceptance test looks wrong to you according to `architecture.md`, return `BLOCKED`.
 6. Run your WP's validation commands and fix until they pass.
+7. A fix attempt may continue your earlier session or start fresh, on another model. Either way, read the diff of the previous attempt when the prompt names it, and work from the code as it is now.
 
 # Report (your final answer, under 300 words)
 
