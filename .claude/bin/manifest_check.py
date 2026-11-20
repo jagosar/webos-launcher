@@ -390,22 +390,32 @@ def waiver_errors(manifest):
 
 # ---------- section 4b: where each fact of the plan comes from ----------
 
-REF_TOKEN_RE = re.compile(r"^[\w./-]+\.\w+:\d+(-\d+)?$")
+REF_TOKEN_RE = re.compile(r"^[\w./-]+:\d+(-\d+)?$")  # path:start[-end]; reference_candidate tells files apart
 SOURCES = ("read", "inferred")
 
 def table_cells(line):
-    """The cells of a markdown table row, split on "|" outside backticks."""
+    """The cells of a markdown table row, split on "|" outside backticks; an escaped "\\|" stays in its cell."""
     cells, current, quoted = [], "", False
     for ch in line.strip():
         if ch == "`":
             quoted = not quoted
-        if ch == "|" and not quoted:
+        if ch == "|" and not quoted and not current.endswith("\\"):
             cells.append(current)
             current = ""
         else:
             current += ch
     cells.append(current)
     return [c.strip() for c in cells[1:-1]] if line.strip().endswith("|") else [c.strip() for c in cells[1:]]
+
+def reference_candidate(token):
+    """True for path:start[-end] whose path holds "/" or "." (".gitignore", "src/a.py") or names an existing file
+    under ROOT ("Makefile"); "localhost:8080" is not one."""
+    if not REF_TOKEN_RE.match(token):
+        return False
+    path = token.rpartition(":")[0]  # the regex allows no other ":"
+    if "/" in path or "." in path:
+        return True
+    return ".." not in Path(path).parts and (ROOT / path).is_file()
 
 def reference_ok(token):
     path, _, lines = token.rpartition(":")
@@ -422,7 +432,7 @@ def row_problem(n, cells, column):
         return f"section 4b, row {n}: Source must be read or inferred"
     if source == "inferred":
         return None
-    tokens = [t for cell in cells for t in re.findall(r"`([^`]+)`", cell) if REF_TOKEN_RE.match(t)]
+    tokens = [t for cell in cells for t in re.findall(r"`([^`]+)`", cell) if reference_candidate(t)]
     if not tokens:
         return f"section 4b, row {n}: read needs a file:line"
     bad = next((t for t in tokens if not reference_ok(t)), None)

@@ -85,6 +85,29 @@ class SlicerEdgeTests(unittest.TestCase):
             self.assertIn("TESTS", out)
 
 
+class AnnexTests(unittest.TestCase):
+    """Design 0024: an unnumbered '## ' heading is an annex, kept in every brief (issue 122)."""
+
+    def test_an_annex_after_section_11_reaches_the_test_author(self):
+        text = TEXT + "## 11. Risks\nRISK\n## Annex A\nROW-A\n"
+        out, sliced = brief.slice_architecture(text, "AT", MANIFEST)
+        self.assertTrue(sliced)
+        self.assertIn("ROW-A", out)
+        self.assertNotIn("RISK", out, "section 11 is still not in the test-author's brief")
+
+    def test_an_annex_inside_section_8_is_cut_out_of_it_and_kept(self):
+        text = TEXT + "## Annex B\nROW-B\n"
+        for ident in ("WP-01", "AT"):
+            with self.subTest(brief=ident):
+                out, sliced = brief.slice_architecture(text, ident, MANIFEST)
+                self.assertTrue(sliced)
+                self.assertIn("ROW-B", out)
+
+    def test_deeper_and_fenced_headings_are_not_annexes(self):
+        text = TEXT + "### Not an annex\n```\n## Fenced\n```\n## Real\n"
+        self.assertEqual([k for kind, k, _ in brief.split(text) if kind == "annex"], ["Real"])
+
+
 class RealPlanTests(unittest.TestCase):
     def test_a_real_plan_is_sliced_and_shrinks(self):
         text = (Path(__file__).resolve().parent / "fixtures" / "lean-agents-plan.md").read_text(encoding="utf-8")

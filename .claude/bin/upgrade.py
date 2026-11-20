@@ -153,6 +153,20 @@ NOTES = {
         "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
         "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
     ],
+    "2.17.0": [
+        "Briefs keep annexes: any `## ` heading without a number (## Annex A, ## Anexo) is an annex that reaches "
+        "every agent's brief; before, an annex after section 8, 10 or 11 never reached an agent.",
+        "validate accepts section 4b references to dotfiles (.gitignore:1-8) and to existing files without an "
+        "extension (Makefile:1), and an escaped \\| no longer splits a table cell.",
+        "install deletes the kept copy in .claude/state/upgrade/ of any file it no longer keeps; doctor reports old "
+        "obsolete copies as upgrade-stale, which doctor --fix deletes, and upgrade-pending counts only live ones.",
+        "The fallback checks it can reach the API before the first agent when auth status reports the first-party "
+        "API: a DNS, connect or timeout failure, or a proxy asking for credentials, stops with the proxy variable "
+        "names that are set (never their values).",
+        "/implement runs agentic.py sessions-check: when another Claude Code session used the folder in the last 10 "
+        "minutes it stops, asks whether that session is closed, and goes on with --ignore or recommends a git "
+        "worktree. The hook now records main-thread session ids in its heartbeat.",
+    ],
     "2.16.1": [
         "install adds .claude/settings.local.json to .gitignore: it holds one machine's permissions and, after "
         "doctor --fix, its Git Bash path, so it is never committed by accident.",

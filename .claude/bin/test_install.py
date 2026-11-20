@@ -330,6 +330,17 @@ class InstalledCopyTests(InstallCase):
         self.assertEqual(self.version_seen(t), "dev")
 
 
+class KeptCopyCleanupTests(InstallCase):
+    """Design 0024: install deletes the kept copy of any file it does not keep (new, updated or unchanged)."""
+
+    def test_a_file_installed_again_as_new_loses_its_old_kept_copy(self):
+        t = self.target({".claude/state/upgrade/.claude/agents/qa.md": "an old new version\n"}, "new-again")
+        r = self.install(t)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(".claude/agents/qa.md", listed(r.stdout, "new"))
+        self.assertFalse((t / ".claude/state/upgrade/.claude/agents/qa.md").exists())
+
+
 class ShippedModulesTests(unittest.TestCase):
     """From test_acceptance_v212 (AC-007): every module of the flow beside agentic.py is installed in projects."""
 

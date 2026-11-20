@@ -189,6 +189,8 @@ Every decision, with the discarded alternative and the reason, including those y
 What is not settled. If something blocks a WP, that WP is not ready. In a large size, include the rollback plan.
 ```
 
+**Annexes.** Long material a criterion or a contract depends on (a catalogue, a table of cases) can go in an annex: a `## ` heading without a number, such as `## Annex A · Catalogue`. Every brief keeps every annex, the test-author's and each package's, while numbered sections are cut per agent. Refer to an annex by its heading.
+
 No invented figures: every number in the document (costs, times, counts, limits, line ranges) comes from a command you ran or a file you read; what you did not measure is written as "not measured".
 
 At the end of section 8 goes the manifest the guardrails read. It is mandatory and carries the exact label `json wp-manifest`:

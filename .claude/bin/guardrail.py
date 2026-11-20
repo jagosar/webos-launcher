@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compat  # noqa: E402  - the operating-system layer, next to this file
 from core import (  # noqa: E402
     ARCHIVE_DIR, GATE_MAX_DENIALS, HOOK_SEEN, HOOK_SEEN_COMMAND_CHARS, HOOK_SEEN_MAX_AGE_S, ManifestError,
+    SESSION_SHOWN_CHARS, SESSION_WINDOW_S,
     PROTECTED_CONFIG_RE, READ_ONLY_AGENTS, ROOT, SECRET_RES, SKIP_MARKER_RE, TEST_PATH_RE, WP_ID_RE, at_entity,
     codemap_path, entities, flow_hooks, flow_path_refused, ledger_update, load_manifest, locked_json,
     now_hm, owns, shortcut_problems, stage_of, with_claims, wps
@@ -324,13 +325,25 @@ def record_hook_seen(data):
     tinput = data.get("tool_input") or {}
     command = tinput.get("command", "") if data.get("tool_name") == "Bash" else ""
     guarded = is_flow_agent(data)
+    session = data.get("session_id") if isinstance(data.get("session_id"), str) else ""
+    main_thread = not data.get("agent_type") and not os.environ.get("AGENTIC_WP")
 
     def update(seen):
         new = dict(seen, ts=now, tool=data.get("tool_name", ""), command=str(command)[:HOOK_SEEN_COMMAND_CHARS],
                    agent_type=data.get("agent_type"))
         new["guarded_ts"] = now if guarded else seen.get("guarded_ts")
+        if session:
+            new["session_id"] = session
+        new["sessions"] = recent_sessions(seen, now)
+        if session and main_thread:  # agents' sessions would look like other sessions right after a run
+            new["sessions"][session] = now
         return new
     locked_json(HOOK_SEEN, update)
+
+def recent_sessions(seen, now):
+    """The heartbeat's {session id: time} of main-thread hook calls within SESSION_WINDOW_S; {} when malformed."""
+    sessions = seen.get("sessions") if isinstance(seen.get("sessions"), dict) else {}
+    return {k: v for k, v in sessions.items() if isinstance(v, (int, float)) and now - v <= SESSION_WINDOW_S}
 
 def hooks_static_problem():
     """Why the project's settings would not run the flow's hook, or None."""
@@ -523,6 +536,45 @@ def hooks_check():
     hook_cmd = flow_hooks(settings["hooks"]["PreToolUse"])[0][1]["command"]
     print(json.dumps({"ok": True, "mode": "static", "hook": hook_cmd}))
     return 0
+
+def _forget(prefixes):
+    """A locked_json update that drops the sessions whose id starts with one of prefixes (None: nothing to write)."""
+    def update(seen):
+        if not prefixes or not isinstance(seen.get("sessions"), dict):
+            return None
+        return dict(seen, sessions={k: v for k, v in seen["sessions"].items() if not k.startswith(prefixes)})
+    return update
+
+def _not_checked(reason):
+    print(json.dumps({"ok": True, "mode": "not checked", "reason": reason}))
+    return 0
+
+def sessions_check(ignore=()):
+    """sessions-check: inside a Claude tool call, 3 when another session's main thread called the hook in this root
+    within SESSION_WINDOW_S; ignore holds id prefixes the user confirmed closed, which are forgotten. Else 0."""
+    if not os.environ.get("CLAUDECODE"):
+        return _not_checked("outside a Claude Code tool call")
+    now, prefixes = time.time(), tuple(ignore)
+    seen = locked_json(HOOK_SEEN, _forget(prefixes)) if HOOK_SEEN.exists() else {}
+    own = os.environ.get("CLAUDE_CODE_SESSION_ID") or seen.get("session_id")
+    if not isinstance(own, str) or not own:
+        return _not_checked("the hook recorded no session id")
+    others = sorted(({"session": k[:SESSION_SHOWN_CHARS], "age_s": int(now - v)}
+                     for k, v in recent_sessions(seen, now).items() if k != own and not k.startswith(prefixes)),
+                    key=lambda o: o["age_s"])
+    out = {"ok": not others, "mode": "live", "session": own[:SESSION_SHOWN_CHARS], "others": others}
+    if not others:
+        print(json.dumps(out))
+        return 0
+    out["reason"] = f"another Claude Code session used this folder within the last {SESSION_WINDOW_S // 60} minutes"
+    print(json.dumps(out))
+    names = " ".join(f"--ignore {o['session']}" for o in others)
+    print(f"Another Claude Code session used this folder in the last {SESSION_WINDOW_S // 60} minutes "
+          f"({', '.join(o['session'] for o in others)}). A second session that commits, switches branches or edits "
+          "files here stops the run. Close it, or work in a git worktree of its own (git worktree add ../<folder> -b "
+          "<branch>). If it is already closed (a restart or /clear leaves the old id behind), run: "
+          f"python3 .claude/bin/agentic.py sessions-check {names}", file=sys.stderr)
+    return 3
 
 def hook():
     """Fails closed: any error inside a WP or QA blocks the tool."""

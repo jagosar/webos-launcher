@@ -400,6 +400,38 @@ class LoginRuleTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PATH": "/bin"}, clear=True):
             self.assertEqual(launch._inherited({}), "none")
 
+class NetworkCheckTests(unittest.TestCase):
+    """Design 0024 (issue 125): the proxies urllib would use, the names shown, and the stop message."""
+
+    def test_proxies_follow_urllib_and_no_proxy(self):
+        env = {"HTTPS_PROXY": "http://upper:1", "https_proxy": "http://lower:1", "ALL_PROXY": "http://all:1"}
+        self.assertEqual(launch._proxies(env, "api.example.com"), {"https": "http://lower:1", "http": "http://all:1"})
+        self.assertEqual(launch._proxies(dict(env, NO_PROXY="example.com"), "api.example.com"), {})
+        self.assertEqual(launch._proxies({}, "api.example.com"), {})
+
+    def test_proxy_names_never_show_values(self):
+        env = {"NO_PROXY": "x", "HTTPS_PROXY": "http://u:secret@p:1"}
+        self.assertEqual(launch._proxy_names(env), "HTTPS_PROXY, NO_PROXY")
+        self.assertEqual(launch._proxy_names({}), "none")
+
+    def test_the_stop_names_the_host_and_never_a_value(self):
+        env = {"ANTHROPIC_BASE_URL": "https://user:pw@gateway.example.com/v1", "HTTPS_PROXY": "http://u:secret@p:1"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(launch, "_reachable", return_value=(False, "timed out")), \
+                mock.patch.object(launch, "die", side_effect=SystemExit(1)) as die, self.assertRaises(SystemExit):
+            launch._require_network({}, {"apiProvider": "firstParty"})
+        message = die.call_args.args[0]
+        for words in ("gateway.example.com", "ANTHROPIC_BASE_URL", "timed out", "HTTPS_PROXY"):
+            self.assertIn(words, message)
+        for secret in ("secret", "pw@", "/v1", "p:1"):
+            self.assertNotIn(secret, message)
+
+    def test_a_reachable_api_or_another_provider_goes_on(self):
+        with mock.patch.object(launch, "_reachable", return_value=(True, "")) as reach:
+            launch._require_network({}, {"apiProvider": "firstParty"})
+            launch._require_network({}, {"apiProvider": "vertex"})
+        self.assertEqual(reach.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

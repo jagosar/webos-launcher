@@ -8,6 +8,7 @@ import json
 import shutil
 from pathlib import Path
 
+import compat
 from core import LEDGER_JSON, QUALITY_BASELINE, ROOT, RULES_DIR, RULES_LIBRARY, STATE, is_flow_repo
 from guardrail import git_bash_state, hooks_static_problem
 from installer import INSTALL_RECORD, RETIRED_PERMISSIONS, flow_version
@@ -125,14 +126,38 @@ def diagnose(git_bash=git_bash_state):
     if running:
         found.append(route("agents-running", f"the ledger says {', '.join(running)} running; if no run is in progress, "
                                              "stop them", f"{AGENTIC} stop"))
-    pending = sum(1 for p in UPGRADE_DIR.rglob("*") if p.is_file()) if UPGRADE_DIR.is_dir() else 0
-    if pending:
+    stale, live = kept_copies()
+    if stale:
+        found.append(auto("upgrade-stale", f"{len(stale)} kept version(s) in .claude/state/upgrade/ are obsolete: the "
+                                           "installed file is no longer edited", "delete them"))
+    if live:
         found.append({"code": "upgrade-pending", "severity": "mention",
-                      "message": f"{pending} new version(s) kept beside your edits in .claude/state/upgrade/"})
+                      "message": f"{len(live)} new version(s) kept beside your edits in .claude/state/upgrade/"})
     bash = git_bash_finding(git_bash())
     if bash:
         found.append(bash)
     return found
+
+
+def kept_copies():
+    """(stale, live): the files under UPGRADE_DIR, as sorted posix paths relative to it. A copy is stale when the
+    installed file is gone, the record does not know the path, or the installed file is the one recorded (no longer
+    edited). Without a readable record every copy is live."""
+    if not UPGRADE_DIR.is_dir():
+        return [], []
+    copies = sorted(p.relative_to(UPGRADE_DIR).as_posix() for p in UPGRADE_DIR.rglob("*") if p.is_file())
+    record = read_json(ROOT / INSTALL_RECORD)
+    files = record.get("files") if isinstance(record, dict) else None
+    if not isinstance(files, dict):
+        return [], copies
+    stale = [rel for rel in copies if not (ROOT / rel).is_file() or rel not in files
+             or compat.content_hash(ROOT / rel) == files[rel]]
+    return stale, [rel for rel in copies if rel not in stale]
+
+
+def remove_stale_copies():
+    for rel in kept_copies()[0]:
+        (UPGRADE_DIR / rel).unlink()
 
 
 def remove_retired_rules():
@@ -141,7 +166,8 @@ def remove_retired_rules():
     SETTINGS.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-REPAIRS = {"guard-leftover": lambda: shutil.rmtree(GUARD_DIR), "retired-permission": remove_retired_rules}
+REPAIRS = {"guard-leftover": lambda: shutil.rmtree(GUARD_DIR), "retired-permission": remove_retired_rules,
+           "upgrade-stale": remove_stale_copies}
 
 
 def repair_git_bash(git_bash):

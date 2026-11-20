@@ -46,6 +46,7 @@ INSTALL_GLOBS = [
 ]
 
 INSTALL_RECORD = ".claude/agentic-install.json"
+UPGRADE_KEPT = ".claude/state/upgrade"  # new versions of files the user edited, beside them
 
 RESULT_FILE = ".agentic-result.json"  # where the workflow leaves its result for save-result
 
@@ -220,13 +221,16 @@ def install_write(target, prep, dry_run):
         if kind == "kept":
             report["modified by you (left alone)"].append(rel)
             new_record[rel] = previous.get(rel, "")
-            dst = target / ".claude" / "state" / "upgrade" / rel  # the new version, beside the user's
+            dst = target / UPGRADE_KEPT / rel  # the new version, beside the user's
         else:
             report[kind].append(rel)
             new_record[rel] = compat.content_hash(src)
         if kind != "unchanged" and not dry_run:
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(src.read_bytes())
+        stale = target / UPGRADE_KEPT / rel
+        if kind != "kept" and not dry_run and stale.is_file():
+            stale.unlink()  # a new version kept beside an edit that is gone: install took the file over again
     if not dry_run:
         for rel in removed:
             (target / rel).unlink()
