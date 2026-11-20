@@ -35,8 +35,10 @@ jobs:
       # every push used 1,860 of the 2,000 included minutes in one day: pull requests then ran Linux only.)
       matrix:
         os: [ubuntu-latest]
-        python: ["3.9", "3.12", "3.14"]
+        python: ["3.12", "3.14"]
         include:
+          # ubuntu-latest is 26.04, which has no Python 3.9 build: the oldest supported Python runs on 24.04.
+          - {os: ubuntu-24.04, python: "3.9"}
           - {os: windows-latest, python: "3.12"}
         # macOS is not in the matrix: nobody here uses it, and its scarce runners queued past the job's time limit.
     defaults:

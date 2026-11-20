@@ -1495,6 +1495,114 @@
           "not_checked": []
         }
       ]
+    },
+    {
+      "name": "an open-stage that crashes before agentic.py answers is retried once",
+      "gate_fail": [
+        {
+          "prefix": "open-stage 1",
+          "exit_code": 5,
+          "output": "bash.exe: *** fatal error - add_item failed, errno 1",
+          "times": 1
+        }
+      ]
+    },
+    {
+      "name": "an open-stage that crashes twice stops the run",
+      "gate_fail": [
+        {
+          "prefix": "open-stage 1",
+          "exit_code": 5,
+          "output": "bash.exe: *** fatal error - add_item failed, errno 1",
+          "times": 2
+        }
+      ]
+    },
+    {
+      "name": "a close-stage that crashes is never retried",
+      "gate_fail": [
+        {
+          "prefix": "close-stage 1 ",
+          "exit_code": 5,
+          "output": "bash.exe: *** fatal error - add_item failed, errno 1",
+          "times": 1
+        }
+      ]
+    },
+    {
+      "name": "an open-stage refused with its JSON is not retried",
+      "gate_fail": [
+        {
+          "prefix": "open-stage 1",
+          "exit_code": 3,
+          "output": {
+            "stage": "1",
+            "owners": []
+          },
+          "times": 1
+        }
+      ]
+    },
+    {
+      "name": "a prepare reply lost once is retried",
+      "gate_lost": [
+        {
+          "prefix": "hooks-check",
+          "times": 1
+        }
+      ]
+    },
+    {
+      "name": "a prepare reply lost twice stops the run",
+      "gate_lost": [
+        {
+          "prefix": "hooks-check",
+          "times": 2
+        }
+      ]
+    },
+    {
+      "name": "a check the implementer could not run is pending",
+      "reports": {
+        "implementer": {
+          "WP-01": {
+            "checks": [
+              {
+                "command": "powershell -Command Invoke-Pester",
+                "passed": false,
+                "detail": "not run: permission denied by auto mode"
+              },
+              {
+                "command": "python3 -m pytest",
+                "passed": false,
+                "detail": "Not run: command not found"
+              },
+              {
+                "command": "python3 -m pytest -q",
+                "passed": false,
+                "detail": "2 failed"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "an open-stage that answers with its JSON is not retried, whatever its exit",
+      "gate_fail": [
+        {
+          "prefix": "open-stage 1",
+          "exit_code": 2,
+          "output": {
+            "stage": "1",
+            "owners": [
+              "WP-01",
+              "WP-02"
+            ]
+          },
+          "times": 1
+        }
+      ]
     }
   ]
 }

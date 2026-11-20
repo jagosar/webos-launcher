@@ -27,7 +27,7 @@ Launch the saved workflow with the Workflow tool:
 - **name:** `agentic-implement`;
 - **`args`:** `{}`, or `{ "start_wave": N }` if you were given a wave.
 
-It runs in the background. Tell the user in one line that it has started, that they can follow it with `/workflows` and keep talking to you, and end your turn. Do not wait or poll: the completion notification will wake you.
+It runs in the background. Tell the user in one line that it has started, that they can follow it with `/workflows` and keep talking to you, and that nobody (they, you or another session) may commit, switch branches or edit files in this folder until it ends: the guard compares the git state at every stage and stops the run if it changed. Then end your turn. Do not wait or poll: the completion notification will wake you.
 
 While it runs:
 - **"How is it going?":** answer with `python3 .claude/bin/agentic.py status` (the ledger) or point to `/workflows`.
@@ -65,6 +65,7 @@ Then present it like this:
   - **Fix limit reached (per WP), or no WP:** the user decides.
 - **Not checked (`not_checked`):** per agent, what it did not check or skipped, plus QA's `gaps` and the doc-updater's `unverified`.
 - **Stages the hook did not guard:** a stage `check` that contains `GUARDRAIL HOOK SAW NO FLOW AGENT` means files changed with no hook call from an agent of the flow, so only the file comparison applied. Say so, and point to the `agent_type` recorded in `.claude/state/hook-seen.json` and to `/implement fallback`.
+- **Environment retries (`environment_retries`):** the calls that were repeated once because the reply was lost or the interpreter crashed before `agentic.py` answered (only prepare and opening a stage). Each names the call, its exit code and the start of its output; one that keeps appearing points at the machine, not the code.
 - **Gate denials (`gate_denials`):** per WP, how many times the stop gate refused a finished report because its acceptance tests failed. A package with denials and no later fix cycle is a good sign; one at the cap of two deserves a look at its tests.
 - **Failed verifications (`verification_failures`):** each one's blocking phases and suspects, when a verification sent packages to a fix cycle.
 

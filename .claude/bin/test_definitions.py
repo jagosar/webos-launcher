@@ -47,9 +47,10 @@ AGENTS = {
 COMMANDS = {"architect": "opus", "implement": "sonnet"}
 # Manifest fields agentic.py understands: all must be documented in /architect.
 MANIFEST_FIELDS = ["work_packages", "id", "wave", "depends_on", "files", "allow_bash", "acceptance", "verify",
-                   "qa", "ignore", "agent", "mirror", "config_edit", "stack", "docs", "codemap", "waivers"]
+                   "qa", "ignore", "agent", "mirror", "config_edit", "stack", "docs", "codemap", "waivers", "reports"]
 RULES_LIBRARY = CLAUDE / "rules-library"
 RULE_SECTIONS = ["## Style", "## Errors", "## Tests", "## Security", "## Common commands"]
+OWN_PACK = "<!-- Written for agentic-flow. -->"  # a pack with no ECC source (PowerShell)
 PERSONAL_PATH_RE = re.compile(r"/home/[a-z][\w.-]*/|/tmp/claude-\d+|C:\\Users\\|/Users/[a-z][\w.-]+/")
 
 
@@ -317,11 +318,16 @@ class RulesLibraryTests(unittest.TestCase):
                 self.assertRegex(text, r'\A---\npaths:\n(  - "[^"]+"\n)+---\n', "paths: at the top, so they only "
                                  "load around files of that language")
                 self.assertIn("](common.md)", text, "it must point to the common rules")
-                self.assertIn("MIT License", text, "attribution to ECC")
+                self.assertTrue("MIT License" in text or OWN_PACK in text, "ECC's attribution, or the flow's own")
                 positions = [text.find(h) for h in RULE_SECTIONS]
                 self.assertNotIn(-1, positions, "faltan secciones")
                 self.assertEqual(positions, sorted(positions), "the sections follow the common order")
                 self.assertRegex(text, r"\| build \|.*\n\| types \|.*\n\| lint \|.*\n\| tests \|", "fases de verify")
+
+    def test_the_powershell_pack_is_the_flows_own(self):
+        text = (RULES_LIBRARY / "powershell.md").read_text(encoding="utf-8")
+        self.assertIn(OWN_PACK, text)
+        self.assertNotIn("MIT License", text, "it is not adapted from ECC")
 
     def test_common_always_loaded_with_precedence(self):
         text = (RULES_LIBRARY / "common.md").read_text(encoding="utf-8")

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites><testsuite name="pytest" tests="3" failures="1" errors="1">
+  <testcase classname="acceptance.test_cart" name="test_ac_001_total" file="acceptance/test_cart.py" time="0.01"/>
+  <testcase classname="acceptance.test_cart" name="test_ac_002_rounding" file="acceptance/test_cart.py" time="0.02">
+    <failure message="assert 3 == 4">def test_ac_002_rounding(): ...</failure></testcase>
+  <testcase classname="acceptance.test_cart" name="test_ac_003_empty" file="acceptance/test_cart.py" time="0.01">
+    <error message="ValueError: empty">Traceback ...</error></testcase>
+  <testcase classname="acceptance.test_cart" name="test_ac_004_skipped" file="acceptance/test_cart.py">
+    <skipped message="later"/></testcase>
+</testsuite></testsuites>

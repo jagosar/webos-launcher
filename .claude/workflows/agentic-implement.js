@@ -15,11 +15,8 @@ export const meta = {
 }
 
 // Optional input: args = { start_wave: N } to resume from a wave (skips wave 0).
-// The script only orchestrates: it has no shell and no disk. The deterministic steps are run by the gatekeeper agent
-// with agentic.py, several at a time (`agentic.py seq a + b + c`) to save round trips, and the guardrails (the
-// PreToolUse hook) apply to every agent just as outside a workflow.
-// The schemas, prompts and routing rules below mirror .claude/workflows/pipeline-spec.json, which the fallback engine
-// (`agentic.py run-pipeline`) also reads; test_workflow.mjs fails if the two drift apart.
+// No shell, no disk: the gatekeeper runs agentic.py, several steps at a time (`seq a + b`), under the same hooks.
+// Schemas, prompts and routing mirror pipeline-spec.json (also run-pipeline's); test_workflow.mjs checks it.
 const opts = args || {}
 const startWave = /^\d+$/.test(String(opts.start_wave ?? '')) ? Number(opts.start_wave) : null  // 2 or "2"
 const AGENTIC = 'python3 .claude/bin/agentic.py'
@@ -188,9 +185,8 @@ const lastJson = out => {
   const lines = String(out || '').trim().split('\n').filter(l => l.trim().startsWith('{'))
   try { return lines.length ? JSON.parse(lines[lines.length - 1]) : null } catch (e) { return null }
 }
-// Several commands in one gatekeeper call. Returns { steps: [{ cmd, exit_code, output }] } (it stops at the first
-// step that fails, so there can be fewer steps than commands) or null if the gatekeeper failed or garbled the output.
-// A garbled reply is never retried: close-stage and open-stage change state, so repeating them is not safe.
+// Several commands in one gatekeeper call: { steps: [{ cmd, exit_code, output }] }, up to the first failing step, or
+// null when the reply is lost or garbled. Not retried (close-stage changes state), except through seqRetry.
 const seq = async (cmds, label) => {
   if (cmds.length === 1) {
     const g = await gate(cmds[0], label)
@@ -199,6 +195,18 @@ const seq = async (cmds, label) => {
   const g = await gate(`seq ${cmds.join(' + ')}`, label)
   const parsed = g ? lastJson(g.output) : null
   return parsed && Array.isArray(parsed.steps) ? parsed : null
+}
+// Once more if lost, or crashed before agentic.py answered (exit not 0/1/3, no JSON): prepare and lone open-stages.
+const ANSWERED = [0, 1, 3]
+const seqRetry = async (cmds, label) => {
+  const res = await seq(cmds, label)
+  const last = res && res.steps.length ? res.steps[res.steps.length - 1] : null
+  const crashed = !!last && !ANSWERED.includes(last.exit_code) && !lastJson(last.output)
+  if (res && !crashed) return res
+  const output = String(last ? last.output : '').slice(0, 300)
+  run.environment_retries.push({ label, cmd: cmds.join(' + '), exit_code: last ? last.exit_code : null, output })
+  log(`${label}: retried once (environment error)`)
+  return seq(cmds, label)
 }
 const step = (res, i) => (res && res.steps[i]) || null
 const ok = st => !!st && st.exit_code === 0
@@ -224,8 +232,7 @@ const textSum = text => {
   for (const ch of text) sum = (sum + ch.codePointAt(0)) % 1000000007
   return sum
 }
-// findings.py's fingerprint: FNV-1a (32-bit) over the code points of axis|tier|rule|file|problem, the problem trimmed,
-// lowered and cut to 80 code points; the line and the evidence change between reviews and are left out.
+// findings.py's FNV-1a over axis|tier|rule|file|problem (trimmed, lowered, 80 code points); no line or evidence.
 const fingerprint = f => {
   const part = k => (f[k] === undefined || f[k] === null ? '' : String(f[k]))
   const trimmed = part('problem').replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '').toLowerCase()
@@ -251,8 +258,7 @@ const REFUTE_CONFIDENCE = 0.7
 const WAVE_TAIL = ['verify', 'open-stage review', 'callers']
 const HOOKS_DEAD = 'the guardrail hook is not running in this session: run `agentic.py hooks-check` for the cause, or use /implement fallback'
 const LOST = 'the gatekeeper returned no usable result (a timeout or garbled output); the command may have run anyway: check `agentic.py status` before resuming'
-// Files that close-stage saw change for an ID ("WP-01: 2 file(s) changed: a, b"). Used to compare what an agent
-// says it did with what is on disk.
+// Files close-stage saw change for an ID ("WP-01: 2 file(s) changed: a, b"), to compare an agent's claims with disk.
 const changedBy = (out, id) => {
   const m = String(out || '').match(new RegExp(`^${id}: \\d+ file\\(s\\) changed(?:: (.*))?$`, 'm'))
   return m ? (m[1] ? m[1].split(', ') : []) : null
@@ -264,9 +270,8 @@ const unchangedClaims = (report, out, id) => {
     ? report.files.filter(f => !seen.some(s => f === s || f.endsWith('/' + s)))
     : []
 }
-const run = { result: 'REVIEW', stages: [], baseline: null, work_packages: {}, verification: null, review: null, qa: null, test_audit: null, docs: null, fix_cycles: 0, pending: [], not_checked: [], gate_denials: {}, verification_failures: [], agent_calls: 0 }
-// Every report says what it did not check; the run keeps them per call, fix calls and revisions included.
-// `model` goes to agent() only when set (the escalated fix attempt). Every call counts, a failed one too.
+const run = { result: 'REVIEW', stages: [], baseline: null, work_packages: {}, verification: null, review: null, qa: null, test_audit: null, docs: null, fix_cycles: 0, pending: [], not_checked: [], gate_denials: {}, verification_failures: [], agent_calls: 0, environment_retries: [] }
+// Keeps each report's not_checked per call; passes `model` only when set (escalation); counts every call, failed too.
 const report = async (prompt, opts) => {
   const { model, ...rest } = opts
   run.agent_calls += 1
@@ -281,8 +286,14 @@ const concernPending = []  // DONE_WITH_CONCERNS doubts, kept across cycles and 
 const contextGiven = new Set()  // packages already re-dispatched once with the whole document
 // A pending item for a DONE_WITH_CONCERNS doubt: no severity, so it never blocks; the reviewer weighs it.
 const concernItem = (wp, text) => ({ type: 'concern', source: wp, wp, problem: text })
-// The close-stage marks of a wave. DONE and DONE_WITH_CONCERNS are done; no report is error; anything else
-// (NEEDS_CONTEXT after its re-dispatch, BLOCKED, or a status outside the schema) is a blocker.
+// Each check the implementer could not run (passed false, detail "not run: ..."): a needs-validation item, no blocker.
+const notRun = c => c && c.passed === false && typeof c.command === 'string' && typeof c.detail === 'string' &&
+  /^\s*not run:/i.test(c.detail)
+const untestedItem = (wp, c) => ({ type: 'needs validation', source: wp, wp, file: null, kind: 'tests not run',
+  problem: c.command, claim: c.command, fact: c.detail, how_to_check: `run ${c.command}` })
+const untestedItems = (wp, rep) =>
+  (rep && Array.isArray(rep.checks) ? rep.checks : []).filter(notRun).map(c => untestedItem(wp, c))
+// Close-stage marks: DONE and DONE_WITH_CONCERNS are done, no report is error, anything else is a blocker.
 const DONE_STATUSES = new Set(['DONE', 'DONE_WITH_CONCERNS'])
 const waveStates = (wpIds, reports) => wpIds.map((wp, i) => `${wp}=${!reports[i] ? 'error' : DONE_STATUSES.has(reports[i].status) ? 'done' : 'blocker'}`)
 // The stop gate's denials in a close-stage output ("GATE: WP-01=1 WP-02=0"), per package; {} if absent.
@@ -342,10 +353,8 @@ const verificationDefects = v => {
   }))
 }
 
-// Living documentation: only with accepted code. The code map is generated by agentic.py (deterministic); the
-// doc-updater brings README, CHANGELOG and guides up to date inside its zone, and docs-check checks links and paths.
-// A documentation problem does not invalidate the code: it becomes a pending item, unless a write left its zone.
-// `steps` are the [codemap, open-stage docs] results that came with the call that closed QA.
+// Living documentation, only with accepted code: codemap (deterministic), the doc-updater in its zone, docs-check.
+// A documentation problem becomes pending unless a write left its zone. `steps`: [codemap, open-stage docs] results.
 async function documentStage(steps) {
   phase('Documentation')
   run.docs = { codemap: null, report: null, ownership_ok: false, check: null }
@@ -383,8 +392,7 @@ async function documentStage(steps) {
   if (doc && doc.unverified && doc.unverified.length) run.pending.push({ type: 'documentation', severity: 'low', problem: 'claims the doc-updater could not verify', unverified: doc.unverified })
 }
 
-// Runs the agents of one wave (implementers, or fixers when defectsByWp is given). The stage is already open; the
-// caller closes it together with whatever comes next.
+// Runs one wave's agents (fixers when defectsByWp is given) in its open stage; the caller closes it with what follows.
 async function launchWave(wave, wpIds, defectsByWp) {
   const reports = await parallel(wpIds.map(wp => () => {
     let prompt = `Implement ${wp}. Your brief is ${brief(wp)}: the parts of architecture.md your package needs.`
@@ -411,12 +419,14 @@ async function launchWave(wave, wpIds, defectsByWp) {
     const rep = withContext[i]
     run.work_packages[wp] = rep
     if (rep && rep.status === 'DONE_WITH_CONCERNS') for (const c of rep.concerns || []) if (typeof c === 'string') concernPending.push(concernItem(wp, c))
+    for (const item of untestedItems(wp, rep)) {
+      if (!concernPending.some(p => pendingKey(p) === pendingKey(item))) concernPending.push(item)
+    }
   })
   return { reports: withContext, closeCmd: `close-stage ${wave} ${waveStates(wpIds, withContext).join(' ')}${defectsByWp ? ' --fix' : ''}` }
 }
 
-// NEEDS_CONTEXT in an implement wave: one more call, with the whole document, the first time only. The second report
-// replaces the first. In a fix wave the agent already had the code and the defects: it stays as it is.
+// NEEDS_CONTEXT in an implement wave: one more call with the whole document, once, replacing the report; not in fixes.
 async function withWholeDocument(wpIds, reports, fixing) {
   const again = []
   wpIds.forEach((wp, i) => {
@@ -435,9 +445,8 @@ async function withWholeDocument(wpIds, reports, fixing) {
   return out
 }
 
-// Runs a list of waves in order. Each close-stage travels in the same gatekeeper call as the open-stage of the next
-// wave; after the last one, verify and open-stage review go in a call of their own. `opened`: the first wave is open.
-// Returns { post: [verify step, open-stage review step] } or { stopped }.
+// Runs waves in order; each close-stage travels with the next open-stage, the last with nothing (verify and open-stage
+// review follow alone). `opened`: the first wave is open. Returns { post: [verify, open-stage review] } or { stopped }.
 async function runWaves(waves, byWave, defectsByWp, opened) {
   const fixing = !!defectsByWp
   if (!waves.length) {
@@ -447,7 +456,7 @@ async function runWaves(waves, byWave, defectsByWp, opened) {
   for (let i = 0; i < waves.length; i += 1) {
     const wave = waves[i]
     if (!opened) {
-      const open = await seq([`open-stage ${wave}`], `open-stage ${wave}`)
+      const open = await seqRetry([`open-stage ${wave}`], `open-stage ${wave}`)
       if (!ok(step(open, 0))) return { stopped: stop(`${fixing ? 'fix ' : ''}wave ${wave}`, 'the stage could not be opened') }
     }
     const { closeCmd } = await launchWave(wave, byWave[wave], defectsByWp)
@@ -519,19 +528,20 @@ const budgetForCycle = defects => {
 }
 
 // ---------- Prepare + Baseline ----------
-// pipeline-plan and the baseline travel together. The baseline is the state of build, types, lint and tests before
-// touching anything: that way a phase that already failed at the end is a "pre-existing failure" and is blamed on no
-// package. When resuming from a wave (start_wave), the original run's baseline is kept.
+// The baseline (build, types, lint, tests before anything changes) makes a phase that already failed a pre-existing
+// failure, blamed on no package. A resumed run (start_wave) keeps the original baseline.
 phase('Prepare')
 // hooks-check goes first: a session whose guardrail hook does not fire must not pay for a single agent.
-const first = await seq(['hooks-check', 'pipeline-plan', 'briefs'], 'prepare')
+const first = await seqRetry(['hooks-check', 'pipeline-plan', 'briefs'], 'prepare')
 const hookStep = step(first, 0)
 if (hookStep && !ok(hookStep)) return stop('prepare', HOOKS_DEAD, { gate: hookStep })
 const planStep = step(first, 1)
 const plan = ok(planStep) ? lastJson(planStep.output) : null
-if (!plan) return stop('prepare', 'pipeline-plan failed: the manifest is not valid', { gate: planStep })
-// Language rules (rules-sync): every agent that writes or judges code receives them, printed when their text arrived
-// whole through the gatekeeper (the checksum), else as their paths.
+// Only a pipeline-plan that ran and refused the manifest says the manifest is invalid; a lost or empty reply does not.
+if (!first) return stop('prepare', LOST)
+if (!plan) return stop('prepare', planStep && !ok(planStep) ? 'pipeline-plan failed: the manifest is not valid'
+  : 'pipeline-plan produced no readable output', { gate: planStep })
+// The rules reach every agent that writes or judges code: printed when the checksum holds, else as their paths.
 const rulesIntact = typeof plan.rules_text === 'string' && plan.rules_text !== '' &&
   textSum(plan.rules_text) === plan.rules_sum
 const RULES = rulesIntact ? plan.rules_text
@@ -589,9 +599,8 @@ const fullReview = async post => {
   needsReview = (specR.needs_validation || []).map(i => needsItem('reviewer', i))
   return closeReview({ spec: record.spec.confirmed, standards: record.standards.confirmed })
 }
-// Each axis re-reviews its open findings (the previous review's confirmed ones of the packages fixed since) against
-// the fixes' diffs, by fingerprint, without verifiers. A missing verdict is NOT_ADDRESSED; what is new goes to pending
-// and never starts a fix cycle.
+// Each axis re-reviews its open findings of the packages fixed since, against the fixes' diffs, by fingerprint, with no
+// verifiers. A missing verdict is NOT_ADDRESSED; anything new goes to pending and never starts a fix cycle.
 const AXIS_NAMES = { spec: 'Spec', standards: 'Standards' }
 const NO_RE_REVIEW = {
   spec: 'the reviewer returned no re-review report',
@@ -644,8 +653,7 @@ const reReviewStage = async post => {
   }
   return closeReview({ spec: record.spec.confirmed, standards: record.standards.confirmed })
 }
-// What the next review starts from: these confirmed findings, and no package fixed since. The reviewers are
-// read-only: if closing their stage finds changes, someone wrote where nobody may.
+// The next review starts from these findings, no package fixed since; a change at close means someone wrote.
 const closeReview = async byAxis => {
   const confirmed = [...byAxis.spec, ...byAxis.standards]
   reviewed = true
@@ -680,7 +688,7 @@ if (startWave === null && plan.acceptance) {
     run.stages.push({ stage: 'baseline', ok: ok(base), check: base && base.output })
     if (!ok(base)) return stop('wave 0', 'the existing suite is not green before the refactor', { gate: base })
   } else {
-    const open = step(await seq(['open-stage acceptance'], 'open-stage acceptance'), 0)
+    const open = step(await seqRetry(['open-stage acceptance'], 'open-stage acceptance'), 0)
     if (!ok(open)) return stop('wave 0', 'the acceptance stage could not be opened', { gate: open })
     let prompt = `Write the acceptance tests. Your brief is ${brief('AT')}: the parts of architecture.md they need.`
     for (let round = 0; ; round += 1) {
@@ -702,7 +710,7 @@ if (startWave === null && plan.acceptance) {
       run.test_audit = { rounds: round + 1, weak, advisory: audit.findings.filter(f => !blocks(f)) }
       if (!weak.length) break
       if (round >= 1) return stop('wave 0', 'the acceptance tests are still weak after one revision: architecture.md or the criteria need review', { test_audit: run.test_audit })
-      const reopen = step(await seq(['open-stage acceptance'], 'open-stage acceptance'), 0)
+      const reopen = step(await seqRetry(['open-stage acceptance'], 'open-stage acceptance'), 0)
       if (!ok(reopen)) return stop('wave 0', 'the acceptance stage could not be reopened', { gate: reopen })
       prompt = `Revise the acceptance tests (your brief is ${brief('AT')}). An independent auditor found these weak points, as JSON:\n` +
         `${JSON.stringify(weak)}\nStrengthen them: the tests of each criterion must fail against an empty or trivial implementation (a stub that returns nothing, ` +

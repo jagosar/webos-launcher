@@ -13,8 +13,8 @@ from pathlib import Path
 
 # Files the template copies besides the flow itself: refreshed only where they already exist and are intact.
 EXTRA_GLOBS = [".claude/bin/test_*.py", ".claude/bin/testutil.py", ".claude/bin/test_workflow.mjs", ".claude/bin/conformance.json",
-               ".claude/bin/fixtures/*", ".github/workflows/agentic-flow-ci.yml", ".github/workflows/reset-readme.yml",
-               "plugin/commands/*.md", ".claude-plugin/*.json"]
+               ".claude/bin/fixtures/*", ".claude/bin/fixtures/reports/*", ".github/workflows/agentic-flow-ci.yml",
+               ".github/workflows/reset-readme.yml", "plugin/commands/*.md", ".claude-plugin/*.json"]
 
 # The release tags: TAG_PREFIX + the version in .claude-plugin/plugin.json.
 TAG_PREFIX = "agentic-flow--v"
@@ -152,6 +152,24 @@ NOTES = {
         "with more than 8 packages, a plan that is a chain of one-package waves. The thresholds are not measured.",
         "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
         "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
+    ],
+    "2.15.0": [
+        "reports in the manifest (optional) names the JUnit or NUnit 2/3 XML report a verify phase or the "
+        "acceptance command writes, e.g. {\"tests\": \"test-results.xml\"}. Verification, the baseline and the "
+        "stop gate then read the failing tests by name: a failure is blamed only on the package that owns it. The "
+        "flow deletes a declared report before its command runs, and close-stage never counts it as a change.",
+        "Without a report, attribution and the gate skip the console lines of passing tests (PASSED, [+], "
+        "\u2713, --- PASS). A runner's summary counts no longer read as new failures; Pester's [-] marks a failure.",
+        "Prepare and a lone open-stage are retried once when the reply is lost or the interpreter crashed before "
+        "agentic.py answered (an exit other than 0, 1 and 3, with no JSON); the run lists them in "
+        "environment_retries. Nothing else is retried. A lost or empty pipeline-plan reply no longer reads as an "
+        "invalid manifest.",
+        "A check the implementer could not run (passed false, detail \"not run: ...\") becomes a needs-validation "
+        "pending item of kind \"tests not run\", never a blocker.",
+        "PowerShell: a rules pack (.claude/rules-library/powershell.md, Pester 3.4 traps) and stack detection for "
+        ".ps1, .psm1 and .psd1. The test-author tests its helpers and doubles, the test-auditor flags one no test "
+        "runs, the plan-reviewer and /architect look for tests that pin what a plan changes. /implement warns that "
+        "nobody may commit in the folder while the workflow runs.",
     ],
     "2.14.0": [
         "The last allowed fix attempt of a package (attempt 2 or later) runs on Opus, the spec's escalation_model, "

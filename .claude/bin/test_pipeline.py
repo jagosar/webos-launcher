@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from functools import partial
 from pathlib import Path
 
 from test_agentic import PY, SCRIPT, Repo, testutil
@@ -24,6 +25,15 @@ import pipeline  # noqa: E402
 
 CONFORMANCE = json.loads((BIN / "conformance.json").read_text(encoding="utf-8"))
 SPEC = json.loads((WORKFLOWS / "pipeline-spec.json").read_text(encoding="utf-8"))
+
+
+def forced_reply(forced, kind, i, entry, cmds):
+    """Whether a gate_fail or gate_lost entry (a prefix, or {"prefix", "times"}) answers this call, counting it."""
+    prefix = entry if isinstance(entry, str) else entry["prefix"]
+    if not any(c.startswith(prefix) for c in cmds):
+        return False
+    forced[(kind, i)] = forced.get((kind, i), 0) + 1
+    return isinstance(entry, str) or "times" not in entry or forced[(kind, i)] <= entry["times"]
 
 
 def world(decl):
@@ -38,10 +48,13 @@ def world(decl):
     def pick(items, n):
         return items[min(n, len(items)) - 1]
 
+    forced = {}  # how many calls each gate_fail / gate_lost entry has answered (a "times" caps them)
+    applies = partial(forced_reply, forced)
+
     def respond(cmd):
         state["gates"].append(cmd)
-        for f in decl.get("gate_fail", []):
-            if cmd.startswith(f["prefix"]):
+        for i, f in enumerate(decl.get("gate_fail", [])):
+            if applies("fail", i, f, [cmd]):
                 return {"exit_code": f["exit_code"], "output": text(f["output"])}
         if cmd == "verify" and decl.get("verify"):
             state["verifies"] += 1
@@ -65,7 +78,7 @@ def world(decl):
 
     def gate(cmds, label):
         state["gate_calls"] += 1
-        if any(c.startswith(prefix) for prefix in decl.get("gate_lost", []) for c in cmds):
+        if [i for i, entry in enumerate(decl.get("gate_lost", [])) if applies("lost", i, entry, cmds)]:
             raise RuntimeError("gatekeeper returned nothing")  # a timeout or a dead agent
         steps = []
         for c in cmds:
@@ -156,7 +169,11 @@ def summarize(result, state):
             "review_callers": (result.get("review") or {}).get("callers", 0),
             "review_axes": review_axes(result.get("review")), "rules": result.get("rules"),
             "verification_failures": len(result.get("verification_failures") or []),
-            "agent_calls": result.get("agent_calls"), "models": sorted(models), "re_review": re_review_counts(result)}
+            "agent_calls": result.get("agent_calls"), "models": sorted(models), "re_review": re_review_counts(result),
+            "environment_retries": [{"cmd": r["cmd"], "exit_code": r["exit_code"]}
+                                    for r in result.get("environment_retries") or []],
+            "untested": [{"wp": p["wp"], "claim": p["claim"], "fact": p["fact"]} for p in result.get("pending", [])
+                         if p.get("kind") == "tests not run"]}
 
 
 def re_review_counts(result):
@@ -264,6 +281,17 @@ class EngineTests(unittest.TestCase):
             raise OSError("no process")
         result = pipeline.Pipeline(SPEC, gate, lambda *a: None).execute()
         self.assertEqual(result["failed_stage"], "prepare")
+        self.assertTrue(result["detail"].startswith("the gatekeeper returned no usable result"), result["detail"])
+
+    def test_only_a_refused_manifest_reads_as_invalid_at_prepare(self):
+        for plan_step, detail in (({"cmd": "pipeline-plan", "exit_code": 0, "output": ""},
+                                   "pipeline-plan produced no readable output"),
+                                  ({"cmd": "pipeline-plan", "exit_code": 1, "output": "ERROR: WP-01 has no files"},
+                                   "pipeline-plan failed: the manifest is not valid")):
+            def gate(cmds, label, step=plan_step):
+                return {"steps": [{"cmd": "hooks-check", "exit_code": 0, "output": "ok"}, step]}
+            result = pipeline.Pipeline(SPEC, gate, lambda *a: None).execute()
+            self.assertEqual((result["failed_stage"], result["detail"]), ("prepare", detail))
 
     def test_structured_report_formats(self):
         import agentic
@@ -659,6 +687,17 @@ class RunPipelineEndToEndTests(unittest.TestCase):
         self.assertEqual(saved["usage"]["total"]["output"], 50 * len(agents))
         for call in (c for c in agents if c["agent"] == "implementer"):
             self.assertIn(f".claude/state/briefs/{call['id']}.md", call["prompt"])
+
+class EnvironmentRetryTests(unittest.TestCase):
+    """Design 0022: only a crash before agentic.py answered is retried; an answer with its JSON never is."""
+
+    def test_an_answer_with_json_is_not_retried_whatever_its_exit(self):
+        decl = next(d for d in CONFORMANCE["scenarios"]
+                    if d["name"] == "an open-stage that answers with its JSON is not retried, whatever its exit")
+        summary = run_scenario(decl)
+        self.assertEqual(summary["environment_retries"], [])
+        self.assertEqual(summary["failed_stage"], "wave 1")
+
 
 if __name__ == "__main__":
     unittest.main()

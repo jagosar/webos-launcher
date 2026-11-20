@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compat  # noqa: E402  - the operating-system layer, next to this file
+from reports import clear_report, failed_tests, failure_text, report_path  # noqa: E402
 from core import (  # noqa: E402
     BASELINE, ENTRY, QUALITY_BASELINE, ROOT, STATE, VERIFY_PHASES, at_entity, child_env, die, is_flow_repo,
     ledger_stage, load_config, sibling, source_files, symbol_re, wps
@@ -18,7 +19,20 @@ from core import (  # noqa: E402
 
 # A phase that already failed at baseline is compared failure by failure: the lines that name a failure, without the
 # durations that change from run to run. A line not seen at baseline is a regression.
-FAILURE_LINE_RE = re.compile(r"(?i)\b(?:fail(?:ed|ure|ures|ing|s)?|errors?)\b|[✕✗×❌]")
+FAILURE_LINE_RE = re.compile(r"(?i)\b(?:fail(?:ed|ure|ures|ing|s)?|errors?)\b|[✕✗×❌]|^\s*\[-\]")  # [-]: Pester
+
+# A runner's summary counts every test: a cycle that adds passing tests changes "10 passed" or "Passed: 10" beside an
+# old failure. The counts read as N, so the summary only changes when the words do; the new failure names itself.
+COUNT_WORDS = r"(?:tests?|passed|passing|failed|failing|failures?|errors?|skipped|pending|todo|total|inconclusive" \
+              r"|xfailed|xpassed|warnings?|deselected)"
+COUNT_AFTER_RE = re.compile(r"(?i)\b\d+(?=\s+(?:tests?\s+)?" + COUNT_WORDS + r"\b)")
+# "Passed: 10" only with a summary's words: "Error: 404" and "Error: 500" are two failures.
+COUNT_BEFORE_RE = re.compile(r"(?i)(\b(?:tests|passed|failed|failures|errors|skipped|pending|inconclusive|notrun|total)"
+                             r"\s*:\s*)\d+\b")
+
+# A line that marks a passing test (pytest -v, Pester, jest, go). Attribution skips it: a passing test's name says
+# nothing about who broke something. A line FAILURE_LINE_RE matches is kept even when this matches too.
+PASS_LINE_RE = re.compile(r"\bPASSED\b|^\s*\[\+\]|[✓✔√]|^\s*--- PASS\b|^ok\s")
 
 DURATION_RE = re.compile(r"\(?\b\d+(?:\.\d+)?\s?(?:ms|s|sec|secs|seconds)\b\)?|\b0x[0-9a-fA-F]+\b")  # and addresses
 
@@ -54,6 +68,7 @@ def acceptance_check(manifest, expect, quiet=False, scan=None):
     cmd = at_entity(manifest)["command"]
     if not cmd:
         die("The manifest has no 'acceptance' section.")
+    clear_report(manifest, "acceptance")
     code, tail = run_command(cmd, scan=scan)
     if not quiet:
         print(f"$ {cmd}  ->  exit {code}")
@@ -194,12 +209,24 @@ def install_quality_baseline(target, dry_run):
 # ---------- baseline and verify ----------
 
 def normal_failure(line):
-    """A failure line without durations or repeated spaces: the same failure reads the same in every run."""
-    return " ".join(DURATION_RE.sub("", line).split())[:MAX_TAIL_LINE]
+    """A failure line without durations, counts or repeated spaces: the same failure reads the same in every run."""
+    counted = COUNT_BEFORE_RE.sub(r"\1N", COUNT_AFTER_RE.sub("N", DURATION_RE.sub("", line)))
+    return " ".join(counted.split())[:MAX_TAIL_LINE]
 
 def failure_lines(lines):
     """The lines of an output that name a failure, normalised, without repeats."""
     return sorted({normal_failure(line) for line in lines if FAILURE_LINE_RE.search(line)} - {""})
+
+def scan_lines(manifest, key, console):
+    """The lines failure comparison and attribution read for one command, and its report's state ("read", "unread",
+    or None when none is declared). A report read gives one line per failing test; otherwise the console, without
+    the lines of passing tests."""
+    rel = report_path(manifest, key)
+    tests = failed_tests(ROOT / rel) if rel else None
+    if tests is not None:
+        return failure_text(tests), "read"
+    kept = [line for line in console if FAILURE_LINE_RE.search(line) or not PASS_LINE_RE.search(line)]
+    return kept, ("unread" if rel else None)
 
 def run_phases(manifest):
     cfg = manifest.get("verify", {})
@@ -208,10 +235,12 @@ def run_phases(manifest):
         if name not in cfg:
             phases.append({"name": name, "skipped": True})
             continue
-        scan = []
-        code, tail = run_command(cfg[name], scan=scan)
-        phases.append({"name": name, "command": cfg[name], "exit": code, "passed": code == 0, "tail": tail,
-                       "_scan": scan})
+        console = []
+        clear_report(manifest, name)
+        code, tail = run_command(cfg[name], scan=console)
+        scan, state = scan_lines(manifest, name, console)
+        phase = {"name": name, "command": cfg[name], "exit": code, "passed": code == 0, "tail": tail, "_scan": scan}
+        phases.append(dict(phase, report=state) if state else phase)
     extra = quality_phase()
     if extra:
         phases.append(extra)
@@ -268,6 +297,8 @@ def verify(manifest):
         was = base.get(ph["name"], {}).get("passed")
         ph["baseline_passed"] = was
         known = base.get(ph["name"], {}).get("failures")  # absent in a baseline from an earlier version
+        if base.get(ph["name"], {}).get("report") != ph.get("report"):
+            known = None  # a report read on one side only: the lines differ in form, compare the phase
         new = [f for f in failure_lines(ph["_scan"]) if f not in set(known)] if known is not None else []
         if ph["passed"]:
             ph["status"] = "ok"
@@ -281,10 +312,12 @@ def verify(manifest):
         else:
             ph["status"] = "regression" if was else "fails"
     if at_entity(manifest)["command"]:
-        scan = []
-        acc_ok, verdict = acceptance_check(manifest, "green", quiet=True, scan=scan)
-        phases.append({"name": "acceptance", "command": at_entity(manifest)["command"], "passed": acc_ok,
-                       "verdict": verdict, "status": "ok" if acc_ok else "fails", "_scan": scan})
+        console = []
+        acc_ok, verdict = acceptance_check(manifest, "green", quiet=True, scan=console)
+        scan, state = scan_lines(manifest, "acceptance", console)
+        phase = {"name": "acceptance", "command": at_entity(manifest)["command"], "passed": acc_ok,
+                 "verdict": verdict, "status": "ok" if acc_ok else "fails", "_scan": scan}
+        phases.append(dict(phase, report=state) if state else phase)
     blocking = [p["name"] for p in phases if p.get("status") in ("regression", "fails")]
     suspects = {}
     for ph in phases:

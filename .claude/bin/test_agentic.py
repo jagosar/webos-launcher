@@ -686,6 +686,29 @@ class BrownfieldTests(Base):
         self.assertEqual(tests["new_failures"], ["FAILED src/a.py::test_x - AssertionError"])
         self.assertEqual(sorted(out["suspects"]), ["WP-01"], "only the new failure is attributed")
 
+    def test_new_passing_tests_beside_an_old_failure_are_not_a_regression(self):
+        # The summary's counts change when a cycle adds tests; the same old failure must stay pre-existing.
+        for old, new in ((("FAILED tests/test_old.py::test_old", "1 failed, 10 passed in 0.52s"),
+                          ("FAILED tests/test_old.py::test_old", "1 failed, 14 passed in 0.61s")),
+                         (("    [-] keeps the title 45ms", "Passed: 100 Failed: 1 Skipped: 0 Pending: 0"),
+                          ("    [-] keeps the title 51ms", "Passed: 112 Failed: 1 Skipped: 0 Pending: 0"))):
+            self.suite(*old)
+            self.repo.run("baseline")
+            self.suite(*new)
+            out = json.loads(self.repo.run("verify").stdout)
+            self.assertTrue(out["ok"], out)
+            self.assertEqual(out["preexisting_failures"], ["tests"])
+
+    def test_a_new_pester_failure_beside_an_old_one_is_a_regression(self):
+        # Pester marks a failing It with [-] and no "fail" word: without it a new failure hides behind the old one.
+        self.suite("    [-] keeps the title 45ms", "Passed: 100 Failed: 1")
+        self.repo.run("baseline")
+        self.suite("    [-] keeps the title 45ms", "    [-] src/a.py rounds the total 12ms", "Passed: 100 Failed: 2")
+        r = self.repo.run("verify")
+        self.assertEqual(r.returncode, 3, r.stdout)
+        tests = next(p for p in json.loads(r.stdout)["phases"] if p["name"] == "tests")
+        self.assertEqual(tests["new_failures"], ["[-] src/a.py rounds the total"])
+
     def test_a_baseline_without_failure_lines_compares_by_phase(self):
         # A baseline saved by an earlier version has no failure lines: the phase-level comparison stays.
         self.suite("FAILED tests/test_old.py::test_old")
