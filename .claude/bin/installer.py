@@ -49,7 +49,8 @@ INSTALL_RECORD = ".claude/agentic-install.json"
 
 RESULT_FILE = ".agentic-result.json"  # where the workflow leaves its result for save-result
 
-INSTALL_GITIGNORE = [".claude/state/", RESULT_FILE]
+# settings.local.json holds one machine's permissions and Git Bash path (sync-permissions, doctor --fix).
+INSTALL_GITIGNORE = [".claude/state/", RESULT_FILE, ".claude/settings.local.json"]
 
 WORKFLOW_NAME = "agentic-implement"
 
@@ -57,11 +58,15 @@ WORKFLOW_NAME = "agentic-implement"
 # ---------- settings ----------
 
 def flow_version():
-    manifest = SOURCE_ROOT / ".claude-plugin" / "plugin.json"
-    try:
-        return json.loads(manifest.read_text(encoding="utf-8")).get("version", "dev")
-    except (OSError, json.JSONDecodeError):
-        return "dev"
+    """The plugin manifest's version; in a project installed from a clone, which has none, the install record's."""
+    for path in (SOURCE_ROOT / ".claude-plugin" / "plugin.json", SOURCE_ROOT / INSTALL_RECORD):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict) and data.get("version"):
+            return data["version"]
+    return "dev"
 
 # Rules an older flow added and none needs any more: install removes exactly these from the project's settings.
 RETIRED_PERMISSIONS = ("Bash(python3 .claude/state/guard/bin/agentic.py:*)",)  # the frozen guard, gone in 2.10.0
