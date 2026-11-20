@@ -153,6 +153,19 @@ NOTES = {
         "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
         "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
     ],
+    "2.16.0": [
+        "When hooks-check fails inside a session, its JSON carries a diagnosis and it prints one hint per line: on "
+        "Windows whether Claude Code can find Git Bash, the settings files that declare the hook (and any "
+        "disableAllHooks), the hook command, the roots, the heartbeat under the main checkout of a git worktree, and "
+        "what python3 resolves to. A passing or static check is unchanged.",
+        "On Windows with Git installed outside Program Files, Claude Code may not find Git Bash and runs hooks in "
+        "PowerShell, where the hook command breaks. agentic.py doctor reports it, and doctor --fix writes "
+        "CLAUDE_CODE_GIT_BASH_PATH to .claude/settings.local.json (per machine, never committed); restart Claude Code.",
+        "The fallback runs `<cli> auth status --json` once, before any agent or state: a CLI that is missing or "
+        "reports no login stops with exit 1, listing the inherited CLAUDE_*/ANTHROPIC_* names (no values); an "
+        "unreadable status warns and goes on. The agents' environment drops CLAUDE_CODE_SIMPLE, which stops the "
+        "saved login from being read; nothing else is removed. AGENTIC_CLAUDE names the CLI to use.",
+    ],
     "2.15.0": [
         "reports in the manifest (optional) names the JUnit or NUnit 2/3 XML report a verify phase or the "
         "acceptance command writes, e.g. {\"tests\": \"test-results.xml\"}. Verification, the baseline and the "

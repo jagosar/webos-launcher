@@ -7,8 +7,10 @@ Each test builds a temporary project with test_agentic.Repo; nothing reads the r
 import json
 import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 BIN = Path(__file__).resolve().parent
 ROOT = BIN.parents[1]
@@ -244,6 +246,30 @@ class ProjectStateTests(ProjectStateCase):
         self.assertEqual(snapshot(repo.dir / ".claude/rules"), rules_before)
         self.assertEqual(repo.run("rules-sync").returncode, 0)
         self.assertEqual(self.doctor(repo)[1]["findings"], [])
+
+
+class GitBashRepairTests(unittest.TestCase):
+    """Design 0023: the git-bash repair writes nothing without a derived path, and keeps other settings."""
+
+    def test_no_derived_path_writes_nothing(self):
+        import doctor
+        tmp = Path(tempfile.mkdtemp(prefix="doctor-gitbash-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        local = tmp / "settings.local.json"
+        with mock.patch.object(doctor, "SETTINGS_LOCAL", local):
+            self.assertFalse(doctor.repair_git_bash(lambda: {"derived": None}))
+            self.assertFalse(doctor.repair_git_bash(lambda: None))
+        self.assertFalse(local.exists())
+
+    def test_an_env_that_is_not_an_object_is_refused(self):
+        import doctor
+        tmp = Path(tempfile.mkdtemp(prefix="doctor-gitbash-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        local = tmp / "settings.local.json"
+        local.write_text('{"env": "x"}', encoding="utf-8")
+        with self.assertRaises(ValueError):
+            doctor.write_git_bash_path(local, "D:\\b.exe")
+        self.assertEqual(local.read_text(encoding="utf-8"), '{"env": "x"}')
 
 
 if __name__ == "__main__":

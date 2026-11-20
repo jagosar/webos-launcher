@@ -6,12 +6,15 @@ Run: python3 -m unittest discover -s .claude/bin -p "test_launcher.py"
 """
 import json
 import os
+import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import launch  # noqa: E402
@@ -337,6 +340,66 @@ class ByHandPlanTests(unittest.TestCase):
         for leftover in ("briefs", "runs", "guard"):
             self.assertFalse((state / leftover).exists(), leftover)
         self.assertFalse(list(state.glob("snapshot-*.json")) if state.exists() else [])
+
+class CliBeforeStateTests(LauncherCase):
+    """Design 0023: every one-off command checks the CLI before it writes briefs, a snapshot or the ledger."""
+
+    def test_run_acceptance_checks_the_cli_before_its_briefs(self):
+        self.repo.env["AGENTIC_CLAUDE"] = "no-such-claude-xyz"
+        self.repo.write("acc.py", "import sys\nsys.exit(1)\n")
+        r = self.repo.run("run-acceptance")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("AGENTIC_CLAUDE", r.stderr)
+        self.assertFalse((self.repo.dir / ".claude/state/briefs").exists())
+        self.assertFalse((self.repo.dir / ".claude/state/snapshot-acceptance.json").exists())
+
+
+class RequireCliTests(unittest.TestCase):
+    """Design 0023: require_cli runs once per process; an empty AGENTIC_CLAUDE is not found; a timeout warns."""
+
+    def setUp(self):
+        launch._CLI_CHECKED.clear()
+        self.addCleanup(launch._CLI_CHECKED.clear)
+
+    def test_an_empty_agentic_claude_is_not_found(self):
+        with mock.patch.dict(os.environ, {"AGENTIC_CLAUDE": ""}), self.assertRaises(SystemExit) as stop, \
+                mock.patch("sys.stderr"):
+            launch.require_cli({})
+        self.assertEqual(stop.exception.code, 1)
+
+    def test_it_runs_once_and_a_timeout_only_warns(self):
+        timeout = subprocess.TimeoutExpired(["claude"], launch.AUTH_TIMEOUT_S)
+        claude = shlex.join([Path(sys.executable).as_posix()])  # shlex would eat a Windows path's backslashes
+        with mock.patch.dict(os.environ, {"AGENTIC_CLAUDE": claude}), \
+                mock.patch.object(launch.subprocess, "run", side_effect=timeout) as run, \
+                mock.patch("sys.stderr") as err:
+            launch.require_cli({})
+            launch.require_cli({})
+        self.assertEqual(run.call_count, 1, "one check per process")
+        written = "".join(c.args[0] for c in err.write.call_args_list)
+        self.assertIn("[agentic] could not read the login status of", written)
+
+
+class LoginRuleTests(unittest.TestCase):
+    """Design 0023: the documented logged-out signs, and the inherited names capped and without values."""
+
+    def test_the_logged_out_signs(self):
+        self.assertTrue(launch._logged_out(1, {}))
+        self.assertTrue(launch._logged_out(0, {"authMethod": "none"}))
+        self.assertTrue(launch._logged_out(0, {"loggedIn": False}))
+        self.assertFalse(launch._logged_out(0, {"authMethod": "claude.ai", "loggedIn": True}))
+
+    def test_inherited_names_are_capped_and_never_show_values(self):
+        names = {f"CLAUDE_X{i:02d}": f"value{i}" for i in range(14)}
+        with mock.patch.dict(os.environ, names, clear=True):
+            text = launch._inherited({"auth": "inherit"})
+        self.assertIn("CLAUDE_X00", text)
+        self.assertIn("and 4 more", text)
+        self.assertNotIn("CLAUDE_X13", text, "only the first ten names are listed")
+        self.assertNotIn("value", text)
+        with mock.patch.dict(os.environ, {"PATH": "/bin"}, clear=True):
+            self.assertEqual(launch._inherited({}), "none")
+
 
 if __name__ == "__main__":
     unittest.main()

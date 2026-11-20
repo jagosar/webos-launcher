@@ -8,6 +8,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -344,6 +345,53 @@ class GateReportFileTests(RepoCase):
         r = self.repo.run("close-stage", "1", "WP-01=done", "WP-02=done")
         self.assertIn("other/acc.xml", r.stdout, "a file with the same name elsewhere still counts")
         self.assertNotIn("  out/acc.xml", r.stdout)
+
+
+class HookDiagnosisUnitTests(unittest.TestCase):
+    """Design 0023: hook_diagnosis's pieces, without a live hooks-check."""
+
+    def test_a_heartbeat_without_a_numeric_ts_has_no_age(self):
+        import guardrail
+        tmp = Path(tempfile.mkdtemp(prefix="diag-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        (tmp / ".claude/state").mkdir(parents=True)
+        for raw in ('{"ts": "now"}', '{"ts": true}', "{not json", "[]"):
+            (tmp / ".claude/state/hook-seen.json").write_text(raw, encoding="utf-8")
+            beat = guardrail._heartbeat(tmp)
+            self.assertEqual((beat["exists"], beat["age_s"]), (True, None), raw)
+
+    def test_without_git_there_is_no_worktree_and_no_extra_root(self):
+        import guardrail
+        with mock.patch.object(guardrail.subprocess, "run", side_effect=FileNotFoundError("git")):
+            worktree = guardrail._worktree()
+            beats = guardrail._heartbeats(worktree)
+        self.assertEqual(worktree, {"inside": False, "main": None})
+        self.assertEqual(len(beats), 1)
+
+    def test_the_hints_fall_back_to_hooks_only_when_nothing_else_explains(self):
+        import guardrail
+        base = {"python3": "/usr/bin/python3", "heartbeats": [{"age_s": None}],
+                "settings": [{"path": "s", "declares_hook": True, "disable_all_hooks": False}]}
+        self.assertEqual(len(guardrail._hints(base)), 1)
+        self.assertIn("/hooks", guardrail._hints(base)[0])
+        old = dict(base, heartbeats=[{"age_s": None}, {"path": "o", "age_s": 10_000}])
+        self.assertIn("/hooks", guardrail._hints(old)[0], "a stale heartbeat elsewhere explains nothing")
+        both = dict(base, python3=None, settings=[{"path": "s", "declares_hook": False, "disable_all_hooks": True}])
+        self.assertEqual(len(guardrail._hints(both)), 3)
+
+
+class GitBashStateUnitTests(unittest.TestCase):
+    """Design 0023: a git on PATH whose Git has no bash.exe beside it is not a derived path."""
+
+    def test_a_derived_bash_that_does_not_exist_counts_as_missing(self):
+        import guardrail
+        state = guardrail.git_bash_state(is_windows=True, environ={}, settings_envs=[],
+                                         which=lambda name: "D:\\G\\cmd\\git.exe", exists=lambda path: False)
+        self.assertEqual((state["derived"], state["needs_path"], state["missing"]), (None, False, True))
+
+    def test_a_git_outside_cmd_or_bin_gives_no_candidate(self):
+        import guardrail
+        self.assertIsNone(guardrail._derived_git_bash("D:\\tools\\git.exe"))
 
 
 if __name__ == "__main__":

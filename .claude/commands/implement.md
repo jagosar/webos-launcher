@@ -14,7 +14,7 @@ Arguments: $ARGUMENTS
 
 # 1. Pre-flight validation
 
-1. Run `python3 .claude/bin/agentic.py hooks-check`. If it exits 3, the guardrail hook does not run in this session: stop, show the user its message, and offer `/implement fallback` (each agent runs as `claude -p`, which loads the repository's hooks) or a session with this repository alone. Do not launch the native workflow without guardrails.
+1. Run `python3 .claude/bin/agentic.py hooks-check`. If it exits 3, the guardrail hook does not run in this session: stop, show the user its message and the hints it prints (its JSON's `diagnosis` holds Git Bash on Windows, the settings it read, the roots, the heartbeats it found, the worktree and what `python3` resolves to). On Windows the usual cause is that Claude Code does not find Git Bash: `python3 .claude/bin/agentic.py doctor --fix` writes `CLAUDE_CODE_GIT_BASH_PATH` to `.claude/settings.local.json`; then restart Claude Code and check again. Otherwise offer `/implement fallback` (each agent runs as `claude -p`, which loads the repository's hooks) or a session with this repository alone. Do not launch the native workflow without guardrails.
 2. Run `python3 .claude/bin/agentic.py validate`. If it fails, stop and tell the user to go back to `/architect`.
 3. If section 11 of `architecture.md` blocks any WP, stop.
 4. If the design is not committed, recommend committing it before starting.
@@ -73,7 +73,7 @@ If `result` is `OK`, propose the commit messages (one per logical block, in the 
 
 # 4. Fallback mode (no workflows)
 
-It needs the `claude` CLI on the `PATH`. It is one command that runs the same pipeline as the workflow (wave 0 with its test audit, the waves, verification, review with adversarial verification, QA, fixes, documentation), with one `claude -p` process per agent and the same schemas, prompts and limits:
+It needs the `claude` CLI: the one on the `PATH`, or the command in `AGENTIC_CLAUDE` (a full path, for example). Before the first agent it runs `<cli> auth status --json` once: a CLI that is missing or reports no login stops the run with a message, and an unreadable status only warns. Claude Desktop bundles its own CLI but does not put it on the `PATH`: point `AGENTIC_CLAUDE` at it. A CLI started from inside a Claude Code session inherits that session's `CLAUDE_*` and `ANTHROPIC_*` variables; the flow drops only `CLAUDE_CODE_SIMPLE` (it stops the saved login from being read), and when the CLI still reports no login the message lists the inherited variable names to look at. On Windows the agents' CLI also reads `CLAUDE_CODE_GIT_BASH_PATH` from `.claude/settings.local.json` (`doctor --fix`). It is one command that runs the same pipeline as the workflow (wave 0 with its test audit, the waves, verification, review with adversarial verification, QA, fixes, documentation), with one `claude -p` process per agent and the same schemas, prompts and limits:
 
 ```
 python3 .claude/bin/agentic.py run-pipeline            # or: --start-wave N  |  --resume

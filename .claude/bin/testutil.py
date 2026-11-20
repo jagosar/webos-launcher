@@ -48,10 +48,22 @@ def claude_command(fake_py) -> str:
 #   whose schema requires not_checked says ["nothing else"]
 #   FAKE_RE_REVIEW  the verdict a re-review gives every fingerprint of its prompt (default ADDRESSED)
 #   FAKE_RESUME_FAILS  a call with --resume answers nothing
+#   FAKE_AUTH    how `auth status` answers: unset or "in" (logged in), "out" (authMethod none, exit 1),
+#   "none" (no such command). Each auth call adds a line to FAKE_LOG_DIR/auth.log: "ANTHROPIC_API_KEY" if it
+#   saw that variable, else "-"
 # Every answer names the session "s-<the fake's process id>"; the log records that pid.
 FAKE_CLAUDE = """\
 import json, os, re, sys, time
 argv = sys.argv[1:]
+if "auth" in argv and "status" in argv:  # the fallback's login check: answered before any stdin or call log
+    with open(os.path.join(os.environ["FAKE_LOG_DIR"], "auth.log"), "a", encoding="utf-8") as fh:
+        fh.write(("ANTHROPIC_API_KEY" if os.environ.get("ANTHROPIC_API_KEY") else "-") + "\\n")
+    mode = os.environ.get("FAKE_AUTH", "in")
+    if mode == "none":
+        sys.stderr.write("error: unknown command 'auth'\\n")
+        sys.exit(1)
+    print(json.dumps({"authMethod": "none"} if mode == "out" else {"loggedIn": True, "authMethod": "fake"}))
+    sys.exit(0 if mode != "out" else 1)
 prompt = sys.stdin.buffer.read().decode("utf-8")
 agent = argv[argv.index("--agent") + 1]
 ident = os.environ.get("AGENTIC_WP")

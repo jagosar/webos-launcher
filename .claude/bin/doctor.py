@@ -6,13 +6,16 @@ not even the ledger, which core.ledger_read() would create.
 """
 import json
 import shutil
+from pathlib import Path
 
 from core import LEDGER_JSON, QUALITY_BASELINE, ROOT, RULES_DIR, RULES_LIBRARY, STATE, is_flow_repo
-from guardrail import hooks_static_problem
+from guardrail import git_bash_state, hooks_static_problem
 from installer import INSTALL_RECORD, RETIRED_PERMISSIONS, flow_version
 from repo_scan import wanted_rules
 
 SETTINGS = ROOT / ".claude" / "settings.json"
+SETTINGS_LOCAL = ROOT / ".claude" / "settings.local.json"  # per machine; module level so tests can point it elsewhere
+GIT_BASH_VAR = "CLAUDE_CODE_GIT_BASH_PATH"
 GUARD_DIR = STATE / "guard"
 UPGRADE_DIR = STATE / "upgrade"
 INIT = "/agentic-flow:init"
@@ -72,8 +75,34 @@ def running_ids():
     return sorted(k for k, v in data.items() if isinstance(v, dict) and v.get("state") == "running")
 
 
-def diagnose():
-    """The findings for ROOT, in a fixed order. Reads only; never writes."""
+def git_bash_finding(state):
+    """The "git-bash" finding for a git_bash_state() result, or None (not Windows, configured, or a default install)."""
+    if not state:
+        return None
+    if state["needs_path"]:
+        return auto("git-bash", f"Claude Code may not find Git Bash at {state['derived']} (outside Program Files): "
+                                "hooks then run in PowerShell and break; restart Claude Code after the fix",
+                    f"write {GIT_BASH_VAR}={state['derived']} to .claude/settings.local.json")
+    if state["missing"]:
+        return {"code": "git-bash", "severity": "mention",
+                "message": f"Git Bash was not found: install Git for Windows, or set {GIT_BASH_VAR}"}
+    return None
+
+
+def write_git_bash_path(settings_local, bash):
+    """Sets env.CLAUDE_CODE_GIT_BASH_PATH in the JSON file settings_local, creating the file or the env object and
+    keeping every other key. A file that is not a JSON object is left alone: ValueError."""
+    settings_local = Path(settings_local)
+    data = json.loads(settings_local.read_text(encoding="utf-8")) if settings_local.exists() else {}
+    if not isinstance(data, dict) or not isinstance(data.get("env", {}), dict):
+        raise ValueError(f"{settings_local} is not a JSON object with an env object")
+    data.setdefault("env", {})[GIT_BASH_VAR] = bash
+    settings_local.parent.mkdir(parents=True, exist_ok=True)
+    settings_local.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def diagnose(git_bash=git_bash_state):
+    """The findings for ROOT, in a fixed order. Reads only; never writes. `git_bash` gives the Git Bash state."""
     found = []
     if GUARD_DIR.exists():
         found.append(auto("guard-leftover", ".claude/state/guard/ is left over from the frozen guard retired in 2.10.0",
@@ -100,6 +129,9 @@ def diagnose():
     if pending:
         found.append({"code": "upgrade-pending", "severity": "mention",
                       "message": f"{pending} new version(s) kept beside your edits in .claude/state/upgrade/"})
+    bash = git_bash_finding(git_bash())
+    if bash:
+        found.append(bash)
     return found
 
 
@@ -112,19 +144,36 @@ def remove_retired_rules():
 REPAIRS = {"guard-leftover": lambda: shutil.rmtree(GUARD_DIR), "retired-permission": remove_retired_rules}
 
 
-def repair(findings):
-    """Applies the fix of each "auto" finding; returns their codes, in order."""
+def repair_git_bash(git_bash):
+    """Writes the derived Git Bash path; False when there is none or the local settings cannot take it."""
+    derived = (git_bash() or {}).get("derived")
+    if not derived:
+        return False
+    try:
+        write_git_bash_path(SETTINGS_LOCAL, derived)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def repair(findings, git_bash=git_bash_state):
+    """Applies the fix of each "auto" finding; returns the codes it fixed, in order."""
     fixed = []
     for finding in findings:
-        if finding["severity"] == "auto":
-            REPAIRS[finding["code"]]()
-            fixed.append(finding["code"])
+        if finding["severity"] != "auto":
+            continue
+        if finding["code"] == "git-bash":
+            if repair_git_bash(git_bash):
+                fixed.append("git-bash")
+            continue
+        REPAIRS[finding["code"]]()
+        fixed.append(finding["code"])
     return fixed
 
 
-def report(fix=False):
+def report(fix=False, git_bash=git_bash_state):
     """doctor's output: {"ok", "fixed", "findings"}, the findings read again after any repair."""
-    fixed = repair(diagnose()) if fix else []
-    findings = diagnose()
+    fixed = repair(diagnose(git_bash), git_bash) if fix else []
+    findings = diagnose(git_bash)
     ok = not any(f["severity"] in ("auto", "route") for f in findings)
     return {"ok": ok, "fixed": fixed, "findings": findings}
