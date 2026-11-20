@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<test-run total="2" failed="1"><test-suite type="Assembly" name="shop.dll"><test-suite type="TestFixture" name="CartTests">
+  <test-case name="Totals" fullname="Shop.CartTests.Totals" result="Failed"><failure><message>Expected 4</message></failure></test-case>
+  <test-case name="Empty" fullname="Shop.CartTests.Empty" result="Passed"/>
+  <test-case name="Later" fullname="Shop.CartTests.Later" result="Skipped"/>
+</test-suite></test-suite></test-run>

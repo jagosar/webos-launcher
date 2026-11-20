@@ -57,6 +57,8 @@ Anything touching security, authentication, persistent data or a public API is *
   4. contracts that must be respected;
   5. architecture patterns (repository, service…).
 
+  And one more sweep: grep `acceptance/`, `qa/` and the test folders for every file and every literal the plan changes (CI files, messages, command lines, texts a test may compare). List each hit in 4b as a test to update, with its owner WP: a test that pins the old value fails the cycle otherwise.
+
   The result goes into section 4b of `architecture.md`.
 
   To get oriented fast, start from the code map: `docs/CODEMAP.md` if it exists, or generate it with `python3 .claude/bin/agentic.py codemap`. It is deterministic (files and public symbols), so it works as an index, but it does not replace reading the code.
@@ -208,12 +210,13 @@ At the end of section 8 goes the manifest the guardrails read. It is mandatory a
 
 The manifest's fields:
 
-- **`stack` (recommended):** the project's languages, named after their file in `.claude/rules-library/` (`python`, `typescript`, `go`, `rust`, `java`, `kotlin`, `csharp`, `ruby`, `php`, `swift`). `validate` rejects one without rules. With it, every agent receives the common rules and its language's.
+- **`stack` (recommended):** the project's languages, named after their file in `.claude/rules-library/` (`python`, `typescript`, `go`, `rust`, `java`, `kotlin`, `csharp`, `ruby`, `php`, `swift`, `powershell`). `validate` rejects one without rules. With it, every agent receives the common rules and its language's.
 - **`files`:** paths relative to the repo. A path ending in `/` owns the whole directory. It must match section 4.
 - **`acceptance` (mandatory except in a refactor):** `files` is the test-author's zone and `command` is the command, run without a shell, that executes the acceptance tests. Pick a command that works even if the modules do not exist yet (imports will fail, and that counts as red). In a refactor, `command` is the existing suite.
 - **`allow_bash`:** the only commands the agents may run without asking (build, lint and test from section 3). Minimal and concrete: `validate` rejects rules that allow arbitrary execution.
 - **`verify` (recommended):** the commands of the verification phases (`build`, `types`, `lint`, `tests`), the same as in section 3. The flow runs them as they are, without a shell, after the waves. Phases with no command are marked "not applicable".
 - **`ignore` (optional):** build or test artefacts that belong to nobody, for example `["dist/", "*.log"]`.
+- **`reports` (optional):** the XML report a command writes, by verify phase or `acceptance`, for example `{"tests": "test-results.xml"}` with pytest's `--junitxml` or Pester's `-OutputFormat NUnitXml`. JUnit and NUnit 2/3 are read. With it, verification, the baseline and the stop gate read the failing tests by name instead of the console. The path is relative, nobody owns it, and the flow deletes it before the command runs.
 - **`qa` (optional):** QA's zone. `qa/` by default.
 - **`agent` (optional, per WP):** the subagent that implements it. `implementer` by default. Its definition must declare `model: sonnet`.
 - **`acs` (per WP, recommended):** the criteria (`AC-NNN`) the package answers for. When verification fails, `agentic.py` names the packages that own what the failure mentions: by file path, or by the `AC-NNN` in a failing test's name through this field. Those packages are sent back to fix it. Without `acs`, only the file paths can attribute a failure, and a failing acceptance test that mentions none stops the run for a person to decide.

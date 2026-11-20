@@ -66,5 +66,22 @@ class PrintedRulesTests(unittest.TestCase):
         self.assertEqual(repo_scan.render_rules([], "."), "")
 
 
+class PowerShellStackTests(unittest.TestCase):
+    """PowerShell is detected by its extensions and gets its pack; the ratchet does not measure it (design 0022)."""
+
+    def test_scripts_modules_and_manifests_count_as_powershell(self):
+        self.assertEqual(repo_scan.STACK_SIGNALS["powershell"], ((), (".ps1", ".psm1", ".psd1")))
+        repo = Repo()
+        self.addCleanup(repo.cleanup)
+        for rel in ("tools/Get-Thing.ps1", "tools/Mod.psm1", "tools/Mod.psd1"):
+            repo.write(rel, "function Get-Thing { }\n")
+        detected = json.loads(repo.run("stack").stdout)["detected"]
+        self.assertEqual(detected, {"powershell": {"markers": [], "files": 3}})
+
+    def test_powershell_has_no_code_map_symbols(self):
+        import core
+        self.assertIsNone(core.symbol_re("tools/Get-Thing.ps1"), "it would put PowerShell under the brace ratchet")
+
+
 if __name__ == "__main__":
     unittest.main()

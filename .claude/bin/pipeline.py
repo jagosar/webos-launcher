@@ -55,6 +55,9 @@ def threaded(thunks):
 
 # verify and baseline run the whole suite: each goes in a gatekeeper call of its own, so it fits in one Bash timeout.
 WAVE_TAIL = ["verify", "open-stage review", "callers"]
+ANSWERED = (0, 1, 3)  # agentic.py's own exits: success, die(), a refusal; any other with no JSON is a crash
+RETRY_OUTPUT = 300  # characters of a crashed step's output kept in environment_retries
+NOT_RUN_RE = re.compile(r"^\s*not run:", re.I)  # an implementer check it could not run
 HOOKS_DEAD = ("the guardrail hook is not running in this session: run `agentic.py hooks-check` for the cause, or use /implement fallback")
 LOST = ("the gatekeeper returned no usable result (a timeout or garbled output); the command may have run anyway: "
         "check `agentic.py status` before resuming")
@@ -99,6 +102,21 @@ def gate_line(output):
 def concern_item(wp, text):
     """A pending item for a DONE_WITH_CONCERNS doubt: no severity, so it never blocks; the reviewer weighs it."""
     return {"type": "concern", "source": wp, "wp": wp, "problem": text}
+
+
+def untested_items(wp, report):
+    """A needs-validation item for each check the implementer reported it could not run (passed false, a detail that
+    starts with "not run:"): never a blocker; the person runs it."""
+    checks = report.get("checks") if isinstance(report, dict) else None
+    return [{"type": "needs validation", "source": wp, "wp": wp, "file": None, "kind": "tests not run",
+             "problem": c["command"], "claim": c["command"], "fact": c["detail"], "how_to_check": f"run {c['command']}"}
+            for c in checks or [] if not_run(c)]
+
+
+def not_run(check):
+    """A check reported as not run: passed false and a detail that starts with "not run:"."""
+    return (isinstance(check, dict) and check.get("passed") is False and isinstance(check.get("command"), str)
+            and isinstance(check.get("detail"), str) and bool(NOT_RUN_RE.match(check["detail"])))
 
 
 def missing_context(report):
@@ -158,7 +176,8 @@ class Pipeline:
         self.new_pending = []  # what a re-review found that was not open: listed, never fixed in this run
         self.run = {"result": "REVIEW", "stages": [], "baseline": None, "work_packages": {}, "verification": None,
                     "review": None, "qa": None, "test_audit": None, "docs": None, "fix_cycles": 0, "pending": [],
-                    "not_checked": [], "gate_denials": {}, "verification_failures": [], "agent_calls": 0}
+                    "not_checked": [], "gate_denials": {}, "verification_failures": [], "agent_calls": 0,
+                    "environment_retries": []}
 
     # ---------- utilities ----------
     def stop(self, stage, detail, **extra):
@@ -172,6 +191,20 @@ class Pipeline:
             self.log(f"{label} failed: {e}")
             return None
         return res if res and isinstance(res.get("steps"), list) else None
+
+    def seq_retry(self, cmds, label):
+        """seq, once more when the reply was lost or its last step crashed before agentic.py answered (an exit other
+        than 0, 1 and 3 with no JSON line): only for prepare and a lone open-stage, which can be repeated safely."""
+        res = self.seq(cmds, label)
+        last = res["steps"][-1] if res and res["steps"] else None
+        crashed = last is not None and last.get("exit_code") not in ANSWERED and lines_json(last.get("output")) is None
+        if res is not None and not crashed:
+            return res
+        self.run["environment_retries"].append({"label": label, "cmd": " + ".join(cmds),
+                                                "exit_code": last.get("exit_code") if last else None,
+                                                "output": str(last.get("output") if last else "")[:RETRY_OUTPUT]})
+        self.log(f"{label}: retried once (environment error)")
+        return self.seq(cmds, label)
 
     @staticmethod
     def step(res, i):
@@ -271,14 +304,19 @@ class Pipeline:
     def _execute(self):
         self.phase("Prepare")
         # hooks-check goes first: a session whose guardrail hook does not fire must not pay for a single agent.
-        first = self.seq(["hooks-check", "pipeline-plan", "briefs"], "prepare")
+        first = self.seq_retry(["hooks-check", "pipeline-plan", "briefs"], "prepare")
         hook_step = self.step(first, 0)
         if hook_step and not self.ok(hook_step):
             return self.stop("prepare", HOOKS_DEAD, gate=hook_step)
         plan_step = self.step(first, 1)
         self.plan = lines_json(plan_step["output"]) if self.ok(plan_step) else None
+        # Only a pipeline-plan that ran and refused the manifest says the manifest is invalid; a lost reply does not.
+        if first is None:
+            return self.stop("prepare", LOST)
         if not self.plan:
-            return self.stop("prepare", "pipeline-plan failed: the manifest is not valid", gate=plan_step)
+            return self.stop("prepare", "pipeline-plan failed: the manifest is not valid"
+                             if plan_step and not self.ok(plan_step) else "pipeline-plan produced no readable output",
+                             gate=plan_step)
         plan = self.plan
         self.rules, self.run["rules"] = rules_of(plan)
         self.impl_rules = "" if plan.get("implementer_rules") is False else self.rules
@@ -318,7 +356,7 @@ class Pipeline:
             if not self.ok(base):
                 return self.stop("wave 0", "the existing suite is not green before the refactor", gate=base)
             return None
-        open_ = self.step(self.seq(["open-stage acceptance"], "open-stage acceptance"), 0)
+        open_ = self.step(self.seq_retry(["open-stage acceptance"], "open-stage acceptance"), 0)
         if not self.ok(open_):
             return self.stop("wave 0", "the acceptance stage could not be opened", gate=open_)
         prompt = render(self.prompts["test_author"], brief=brief("AT"), rules=self.rules)
@@ -351,7 +389,7 @@ class Pipeline:
             if round_ >= self.spec["constants"]["audit_rounds"] - 1:
                 return self.stop("wave 0", "the acceptance tests are still weak after one revision: architecture.md or "
                                  "the criteria need review", test_audit=self.run["test_audit"])
-            reopen = self.step(self.seq(["open-stage acceptance"], "open-stage acceptance"), 0)
+            reopen = self.step(self.seq_retry(["open-stage acceptance"], "open-stage acceptance"), 0)
             if not self.ok(reopen):
                 return self.stop("wave 0", "the acceptance stage could not be reopened", gate=reopen)
             prompt = render(self.prompts["test_author_revision"], brief=brief("AT"), weak=compact(weak), rules=self.rules)
@@ -385,6 +423,9 @@ class Pipeline:
             self.run["work_packages"][wp] = rep
             if rep and rep.get("status") == "DONE_WITH_CONCERNS":
                 self.concern_pending.extend(concern_item(wp, c) for c in rep.get("concerns") or [] if isinstance(c, str))
+            for item in untested_items(wp, rep):
+                if not any(pending_key(p) == pending_key(item) for p in self.concern_pending):
+                    self.concern_pending.append(item)
         return f"close-stage {wave} {' '.join(wave_states(wp_ids, reports))}{' --fix' if defects_by_wp else ''}"
 
     def attempt_options(self, wp):
@@ -421,7 +462,7 @@ class Pipeline:
             return {"post": (tail and tail["steps"]) or []}
         for i, wave in enumerate(waves):
             if not opened:
-                open_ = self.seq([f"open-stage {wave}"], f"open-stage {wave}")
+                open_ = self.seq_retry([f"open-stage {wave}"], f"open-stage {wave}")
                 if not self.ok(self.step(open_, 0)):
                     return {"stopped": self.stop(f"{'fix ' if fixing else ''}wave {wave}", "the stage could not be opened")}
             close_cmd = self.launch_wave(wave, by_wave[wave], defects_by_wp)

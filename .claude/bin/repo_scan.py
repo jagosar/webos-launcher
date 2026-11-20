@@ -27,6 +27,7 @@ STACK_SIGNALS = {
     "ruby": (("Gemfile",), (".rb", ".rake")),
     "php": (("composer.json",), (".php",)),
     "swift": (("Package.swift",), (".swift",)),
+    "powershell": ((), (".ps1", ".psm1", ".psd1")),
 }
 
 

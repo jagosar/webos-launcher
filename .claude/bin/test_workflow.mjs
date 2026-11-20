@@ -53,9 +53,9 @@ async function simulate(scenario = {}, args = {}) {
         const cmd = prompt.split('agentic.py ')[1].trim()
         const cmds = cmd.startsWith('seq ') ? cmd.slice(4).split(' + ') : [cmd]
         // A lost gatekeeper call: a timeout or a dead agent, so the script gets nothing back.
-        if ((scenario.lost || []).some(prefix => cmds.some(c => c.startsWith(prefix)))) throw new Error('gatekeeper returned nothing')
+        if ((scenario.lost || []).some(prefix => cmds.some(c => c.startsWith(prefix))) || (scenario.lostCall && scenario.lostCall(cmds))) throw new Error('gatekeeper returned nothing')
         if (!cmd.startsWith('seq ')) return respond(cmd)
-        if (scenario.garble) return { exit_code: 0, output: 'sorry, here is a summary instead' }
+        if (scenario.garble || (scenario.garbleOn && cmd.includes(scenario.garbleOn))) return { exit_code: 0, output: 'sorry, here is a summary instead' }
         const steps = []
         for (const sub of cmd.slice(4).split(' + ')) {
           const r = respond(sub)
@@ -365,10 +365,27 @@ test('agents read their brief, the judges the whole document', async () => {
   for (const type of ['reviewer', 'qa', 'verifier', 'doc-updater']) assert.ok(!prompt(type).includes('briefs/'), type)
 })
 
-test('a garbled gatekeeper reply is never retried and stops the run', async () => {
+test('a garbled prepare reply is retried once, then stops the run', async () => {
   const { result, gateCalls } = await simulate({ garble: true })
   assert.equal(result.failed_stage, 'prepare')
-  assert.equal(gateCalls, 1, 'close-stage and open-stage change state: repeating them is not safe')
+  assert.equal(gateCalls, 2, 'prepare can be repeated safely, once')
+  assert.equal(result.environment_retries.length, 1)
+})
+
+test('a garbled close-stage reply is never retried', async () => {
+  const { result, gates } = await simulate({ garbleOn: 'close-stage 1 ' })
+  assert.equal(result.failed_stage, 'wave 1')
+  assert.equal(gates.filter(g => g.startsWith('close-stage 1 ')).length, 0, 'close-stage changes state: never repeated')
+  assert.deepEqual(result.environment_retries, [])
+})
+
+test('a prepare without a readable pipeline-plan is not reported as an invalid manifest', async () => {
+  const garbled = await simulate({ garble: true })
+  assert.match(garbled.result.detail, /^the gatekeeper returned no usable result/)
+  const silent = await simulate({ gate: cmd => (cmd === 'pipeline-plan' ? { exit_code: 0, output: '' } : null) })
+  assert.equal(silent.result.detail, 'pipeline-plan produced no readable output')
+  const invalid = await simulate({ gate: cmd => (cmd === 'pipeline-plan' ? { exit_code: 1, output: 'ERROR: WP-01 has no files' } : null) })
+  assert.equal(invalid.result.detail, 'pipeline-plan failed: the manifest is not valid')
 })
 
 test('a stage that fails stops the batch: nothing after it runs', async () => {
@@ -482,10 +499,18 @@ const pickRound = (list, round) => list[Math.min(round, list.length) - 1]
 function fromDecl(d) {
   let verifies = 0
   const text = o => (typeof o === 'string' ? o : JSON.stringify(o))
+  // How many calls each gate_fail / gate_lost entry has answered: a "times" caps them, as in test_pipeline.py.
+  const forced = {}
+  const applies = (kind, i, entry, cmds) => {
+    const prefix = typeof entry === 'string' ? entry : entry.prefix
+    if (!cmds.some(c => c.startsWith(prefix))) return false
+    forced[`${kind}${i}`] = (forced[`${kind}${i}`] || 0) + 1
+    return typeof entry === 'string' || entry.times === undefined || forced[`${kind}${i}`] <= entry.times
+  }
   return {
     plan: d.plan,
     gate: cmd => {
-      for (const f of d.gate_fail || []) if (cmd.startsWith(f.prefix)) return { exit_code: f.exit_code, output: text(f.output) }
+      for (const [i, f] of (d.gate_fail || []).entries()) if (applies('fail', i, f, [cmd])) return { exit_code: f.exit_code, output: text(f.output) }
       if (cmd === 'verify' && d.verify) {
         const v = pickRound(d.verify, verifies + 1)
         verifies += 1
@@ -493,7 +518,7 @@ function fromDecl(d) {
       }
       return null
     },
-    lost: d.gate_lost,
+    lostCall: cmds => (d.gate_lost || []).filter((entry, i) => applies('lost', i, entry, cmds)).length > 0,
     testAuthor: d.test_author,
     audit: d.audit ? round => pickRound(d.audit, round) : undefined,
     review: d.review ? round => pickRound(d.review, round) : undefined,
@@ -542,6 +567,8 @@ const summarize = ({ result, calls, gates, gateCalls }) => {
     verification_failures: (result.verification_failures || []).length,
     review_axes: reviewAxes(result.review), rules: result.rules ?? null,
     agent_calls: result.agent_calls, models: models.sort(), re_review: reReviewCounts(result.review),
+    environment_retries: (result.environment_retries || []).map(r => ({ cmd: r.cmd, exit_code: r.exit_code })),
+    untested: (result.pending || []).filter(p => p.kind === 'tests not run').map(p => ({ wp: p.wp, claim: p.claim, fact: p.fact })),
   }
 }
 if (process.argv.includes('--dump')) {

@@ -19,7 +19,8 @@ from core import (  # noqa: E402
     ledger_read, ledger_stage, ledger_update, load_manifest, locked_json, owns, qa_entity,
     review_entity, shortcut_problems, sibling, stage_of, wps
 )
-from verification import acceptance_check, attribute, normal_failure, run_command  # noqa: E402
+from reports import clear_report, report_paths  # noqa: E402
+from verification import acceptance_check, attribute, normal_failure, run_command, scan_lines  # noqa: E402
 
 # Caches and artefacts that test and build tools generate: they do not count as changes.
 DEFAULT_IGNORE = ["__pycache__/", "*.pyc", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/",
@@ -35,7 +36,15 @@ MAX_DIFF_BYTES = 200_000
 def tracked_files():
     out = subprocess.run(["git", "ls-files", "-co", "--exclude-standard", "-z"],
                          cwd=ROOT, capture_output=True, check=True).stdout
-    return [p for p in out.decode().split("\0") if p and not p.startswith(".claude/state/")]
+    reports = set(declared_reports())  # the flow's artefacts: a run that writes one changes nobody's files
+    return [p for p in out.decode().split("\0") if p and not p.startswith(".claude/state/") and p not in reports]
+
+def declared_reports():
+    """The manifest's report paths, matched exactly; [] when the manifest cannot be loaded."""
+    try:
+        return report_paths(load_manifest())
+    except ManifestError:
+        return []
 
 def digest():
     result = {}
@@ -325,10 +334,12 @@ def gate_check(owner_id, status):
         cmd = at_entity(manifest)["command"]
         if not cmd or gate_denials(lambda d: None).get(owner_id, {}).get("denials", 0) >= GATE_MAX_DENIALS:
             return None
-        lines = []
-        code, _ = run_command(cmd, timeout=GATE_TIMEOUT_S, scan=lines)
+        console = []
+        clear_report(manifest, "acceptance")
+        code, _ = run_command(cmd, timeout=GATE_TIMEOUT_S, scan=console)
         if code == 0 or code in (124, 126, 127):
             return None
+        lines, _ = scan_lines(manifest, "acceptance", console)
         own = own_failure(manifest, owner_id, lines)
         if not own:
             return None

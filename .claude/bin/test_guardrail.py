@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -312,6 +313,37 @@ class SharedReviewClaimTests(RepoCase):
         second = self.as_type(bash_payload(claim + "WP-01"), "i2", "implementer")
         self.assertEqual(second.returncode, 2)
         self.assertIn("was already claimed", second.stderr)
+
+
+class GateReportFileTests(RepoCase):
+    """Design 0022: the gate reads the acceptance report and clears a stale one; report paths are artefacts, matched
+    exactly, for the stage check."""
+
+    manifest = dict(GATE_MANIFEST, reports={"acceptance": "out/acc.xml"})
+
+    def test_a_stale_report_is_cleared_before_the_gate_runs(self):
+        stale = ('<testsuite><testcase classname="t" name="test_ac_001_old"><failure message="x"/></testcase>'
+                 '</testsuite>')
+        self.repo.write("out/acc.xml", stale)
+        self.repo.write("acc.py", acceptance_script(["FAILED acceptance/test_x.py::test_ac_002_new - assert"], 1))
+        r = self.repo.run("hook", stdin=json.dumps(finished_report("WP-01")), env={"AGENTIC_WP": "WP-01"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.repo.dir / "out/acc.xml").exists())
+
+    def test_only_the_declared_report_path_is_an_artefact(self):
+        import stage
+        with mock.patch.object(stage, "load_manifest", return_value=self.manifest):
+            self.assertEqual(stage.declared_reports(), ["out/acc.xml"])
+        with mock.patch.object(stage, "load_manifest", side_effect=stage.ManifestError("bad")):
+            self.assertEqual(stage.declared_reports(), [])
+        self.repo.write("acc.py", "import sys\nsys.exit(0)\n")
+        self.repo.run("open-stage", "1")
+        self.repo.as_agent("WP-01")
+        self.repo.write("out/acc.xml", "<x/>")
+        self.repo.write("other/acc.xml", "<x/>")
+        r = self.repo.run("close-stage", "1", "WP-01=done", "WP-02=done")
+        self.assertIn("other/acc.xml", r.stdout, "a file with the same name elsewhere still counts")
+        self.assertNotIn("  out/acc.xml", r.stdout)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<test-results name="Pester" total="3" failures="1">
+  <test-suite type="Powershell" name="Pester" executed="True" result="Failure" success="False"><results>
+    <test-suite type="TestFixture" name="AC-313 panel" executed="True" result="Failure" success="False"><results>
+      <test-case name="AC-313 panel.keeps the title" executed="True" result="Failure" success="False">
+        <failure><message>Expected: {a} But was: {b}</message></failure></test-case>
+      <test-case name="AC-313 panel.opens" executed="True" result="Success" success="True"/>
+    </results></test-suite>
+    <test-suite type="TestFixture" name="AC-314 launcher" executed="True" result="Success" success="True"><results>
+      <test-case name="AC-314 launcher.starts" executed="True" result="Success" success="True"/>
+      <test-case name="AC-314 launcher.later" executed="False" result="Ignored" success="True"/>
+    </results></test-suite>
+  </results></test-suite>
+</test-results>

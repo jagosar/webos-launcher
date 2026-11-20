@@ -29,7 +29,8 @@ You have not seen the conversation in which `architecture.md` was designed, and 
 12. **Baseline:** do the `verify` commands cover the existing suite, so a regression is detected?
 13. **Stack and rules:** does the manifest's `stack` cover the languages the WPs will write? Compare it with `python3 .claude/bin/agentic.py stack`. Does section 7 contradict any rule in `.claude/rules-library/` without saying so?
 14. **Briefs:** does every WP have a `#### WP-NN · <goal>` heading and every AC a `- AC-NNN · <title>` line? `agentic.py briefs` cuts at those lines; without them every agent reads the whole document.
-15. **Documentation:** if there is a `docs` section, does its zone avoid overlapping any WP's and cover what the user will read (README, CHANGELOG)?
+15. **Tests that pin what changes:** for every file and literal the plan changes (CI files, messages, command lines, texts), grep `acceptance/`, `qa/` and the test folders. A test that pins the old value and is not listed in 4b as a test to update, with its owner, is critical: it fails the cycle.
+16. **Documentation:** if there is a `docs` section, does its zone avoid overlapping any WP's and cover what the user will read (README, CHANGELOG)?
 
 # Report (final answer, under 400 words)
 

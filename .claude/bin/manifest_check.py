@@ -65,7 +65,7 @@ def validate(manifest):
     table = wps(manifest)
     maintainer = maintainer_mode(manifest)
     errors = maintainer_errors(manifest) + package_errors(manifest, table) + ownership_errors(manifest, maintainer)
-    errors += command_errors(manifest) + shape_errors(manifest)
+    errors += command_errors(manifest) + shape_errors(manifest) + report_errors(manifest)
     errors += stack_errors(manifest) + docs_errors(manifest)
     errors += agent_model_errors(manifest) + waiver_errors(manifest)
     return errors
@@ -210,6 +210,34 @@ def shape_errors(manifest):
     if not isinstance(verify_cfg, dict) or any(k not in VERIFY_PHASES or not isinstance(v, str) or not v.strip()
                                                   for k, v in verify_cfg.items()):
         errors.append(f"'verify' must be an object with commands (text) for {', '.join(VERIFY_PHASES)}.")
+    return errors
+
+def _report_problem(path, table):
+    """Why a declared report path is refused, or None."""
+    if not isinstance(path, str) or not path.strip():
+        return "must be a non-empty path"
+    if path.startswith("/") or re.match(r"^[A-Za-z]:", path) or "\\" in path or ".." in path.split("/"):
+        return f"'{path}' must be relative, with forward slashes and no '..'"
+    owner = next((wid for wid, wp in table.items() if any(owns(f, path) for f in wp.get("files", []))), None)
+    return f"'{path}' is a file of {owner}; a report is an artefact nobody owns" if owner else None
+
+def report_errors(manifest):
+    """reports: optional; an object mapping a verify phase or "acceptance" to the relative path of the XML report its
+    command writes."""
+    reports = manifest.get("reports")
+    if reports is None:
+        return []
+    if not isinstance(reports, dict):
+        return ["reports: must be an object, e.g. {\"tests\": \"test-results.xml\"}."]
+    keys = VERIFY_PHASES + ("acceptance",)
+    errors, table = [], wps(manifest)
+    for key, path in reports.items():
+        if key not in keys:
+            errors.append(f"reports: unknown key '{key}' (one of {', '.join(keys)}).")
+            continue
+        problem = _report_problem(path, table)
+        if problem:
+            errors.append(f"reports: {key}: {problem}.")
     return errors
 
 def known_packs():

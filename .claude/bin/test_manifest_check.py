@@ -216,5 +216,36 @@ class ValidateCommandTests(unittest.TestCase):
             self.assertEqual(self.project(arch=arch).run("validate").returncode, 0)
 
 
+class ReportFieldTests(unittest.TestCase):
+    """reports: a verify phase or acceptance mapped to a relative path nobody owns (design 0022)."""
+
+    def errors(self, reports):
+        return manifest_check.report_errors(dict(MANIFEST, reports=reports))
+
+    def test_absent_and_valid(self):
+        self.assertEqual(manifest_check.report_errors(MANIFEST), [])
+        self.assertEqual(self.errors({"tests": "out/r.xml", "acceptance": "a.xml", "build": "b/r.xml"}), [])
+
+    def test_each_problem_is_named(self):
+        cases = {"unknown key 'unit'": {"unit": "r.xml"}, "must be relative": {"tests": "/abs/r.xml"},
+                 "no '..'": {"tests": "../r.xml"}, "non-empty": {"tests": " "},
+                 "forward slashes": {"tests": "a\\b.xml"},
+                 "file of WP-01": {"tests": "src/a.py"}, "file of WP-02": {"tests": "src/b/r.xml"}}
+        for words, reports in cases.items():
+            with self.subTest(reports=reports):
+                errors = self.errors(reports)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertTrue(errors[0].startswith("reports:"), errors)
+                self.assertIn(words, errors[0])
+        self.assertEqual(self.errors(["r.xml"])[0][:9], "reports: ")
+
+    def test_validate_reports_them(self):
+        repo = Repo(dict(MANIFEST, reports={"tests": "../r.xml"}))
+        self.addCleanup(repo.cleanup)
+        r = repo.run("validate")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("reports: tests:", r.stdout + r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,7 @@ You write the acceptance tests **before** anyone implements anything. You are th
 4. **Your zone, and only that.** You may only write the files of the manifest's `acceptance.files` (`acceptance/` by default). No production code, not even stubs.
 5. **Red for the right reason.** The tests must fail now because the code does not exist, not because of mistakes of yours. Run the acceptance command and check that they fail from missing imports or symbols, or from assertions, and not from syntax or fixture errors.
 6. **No new dependencies**, no git and no other Claude sessions.
+7. **Helpers and doubles are tested too.** Every helper or test double you write (a fake, a stub, a builder, a mock wrapper) gets a test of its own that runs it once on a trivial input and checks what it returns, before any criterion relies on it. A fake that always answers the same thing makes a criterion's test pass against a stub.
 
 # Process
 
