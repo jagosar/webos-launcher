@@ -76,6 +76,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compat  # noqa: E402  - the operating-system layer, next to this file
+
+if __name__ == "__main__" and sys.argv[1:2] == ["hook"]:  # every tool call runs this: load only the guard
+    from core import die as _die, root_drift as _root_drift  # noqa: E402
+    compat.utf8_stdio()
+    _problem = _root_drift()
+    if _problem:
+        _die(_problem)
+    from guardrail import hook as _hook  # noqa: E402
+    _hook()  # never returns: it exits 0, or 2 when it blocks
+
 # The modules by domain. Some names are imported only to be re-exported: tests and the acceptance files read them as
 # agentic.<name>, and test_definitions.StructureTests checks they are the modules' own objects.
 from core import (  # noqa: E402
