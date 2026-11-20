@@ -87,6 +87,7 @@ DEFAULT_CONFIG = {
 }
 # Variables that would make an agent bill the API instead of the subscription.
 API_AUTH_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+CHILD_ENV_DROPPED = ("CLAUDE_CODE_SIMPLE",)  # documented to stop the saved login from being read
 MANIFEST_RE = re.compile(r"```json\s+wp-manifest\s*\n(.*?)\n```", re.S)
 # ---- Content guardrails (adapted from ECC: config-protection, block-no-verify, governance-capture) ----
 # Shared by the hook (content_checks) and the stage check (content_problems).
@@ -320,6 +321,8 @@ def refuse_by_hand_plan(manifest):
 
 def child_env(cfg, **extra):
     env = dict(os.environ, **extra)
+    for var in CHILD_ENV_DROPPED:
+        env.pop(var, None)
     if cfg.get("auth", "subscription") == "subscription":
         for var in API_AUTH_VARS:
             env.pop(var, None)

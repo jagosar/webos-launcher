@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -45,10 +46,68 @@ PIPELINE_STATE = STATE / "pipeline.json"
 
 PIPELINE_SPEC = ROOT / ".claude" / "workflows" / "pipeline-spec.json"
 
+AUTH_TIMEOUT_S = 60  # `claude auth status` answers at once; past this the status is unreadable, not a failure
+_CLI_CHECKED = []  # set once require_cli passed or warned: one check per process
+
 FENCED_JSON_RE = re.compile(r"```json[ \t]*\n(.*?)\n```", re.S)
 
 
 # ---------- launchers ----------
+
+def _cli_argv():
+    return shlex.split(os.environ.get("AGENTIC_CLAUDE", "claude"))
+
+INHERITED_SHOWN = 10  # inherited variable names listed when the CLI reports no login
+
+
+def _auth_status(argv, cfg):
+    """(returncode, parsed JSON object) of `<cli> auth status --json` with the agents' environment; (None, None) when
+    it cannot run or times out; the object is None when stdout is not a JSON object."""
+    try:
+        r = subprocess.run(compat.resolve(argv) + ["auth", "status", "--json"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
+                           env=child_env(cfg, CLAUDE_PROJECT_DIR=str(ROOT)), timeout=AUTH_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    try:
+        data = json.loads(r.stdout)
+    except ValueError:
+        data = None
+    return r.returncode, data if isinstance(data, dict) else None
+
+def _logged_out(code, data):
+    """The documented signs: exit code 1, authMethod "none"; and loggedIn false, which the CLI also prints."""
+    return code == 1 or data.get("authMethod") == "none" or data.get("loggedIn") is False
+
+def _inherited(cfg):
+    """The CLAUDE_* and ANTHROPIC_* names the agents inherit (never their values), at most INHERITED_SHOWN."""
+    names = sorted(n for n in child_env(cfg) if n.startswith(("CLAUDE_", "ANTHROPIC_")) and n != "CLAUDE_PROJECT_DIR")
+    shown = ", ".join(names[:INHERITED_SHOWN])
+    more = len(names) - INHERITED_SHOWN
+    return (shown + (f" and {more} more" if more > 0 else "")) if names else "none"
+
+def require_cli(cfg):
+    """Once per process, before any agent and any state: the agents' binary (AGENTIC_CLAUDE or "claude") must exist,
+    and `auth status` must not report it logged out. An unreadable status warns and goes on."""
+    if _CLI_CHECKED:
+        return
+    argv = _cli_argv()
+    if not argv or not (shutil.which(argv[0]) or Path(argv[0]).is_file()):
+        name = argv[0] if argv else "(empty)"
+        die(f"The claude CLI was not found: `{name}` (from AGENTIC_CLAUDE, or the default `claude`) is not on the "
+            "PATH. The fallback runs one `claude -p` per agent: install the CLI, or set AGENTIC_CLAUDE to its full "
+            "path. Claude Desktop bundles its own CLI but does not put it on the PATH: point AGENTIC_CLAUDE at it.")
+    code, status = _auth_status(argv, cfg)
+    binary = compat.resolve(argv)[0]
+    if status is not None and _logged_out(code, status):
+        die(f"The claude CLI at {binary} reports no login, so every agent would fail. If it works in a terminal of its "
+            f"own, a variable inherited from this session may hide its login; the agents inherit: {_inherited(cfg)}. "
+            f"Otherwise run `{shlex.join(argv)} auth login` once in a terminal, or bill the API: \"auth\": \"inherit\" "
+            "in .claude/agentic.json with ANTHROPIC_API_KEY set.")
+    if status is None:
+        print(f"[agentic] could not read the login status of {binary} (auth status): going on; an agent that is not "
+              "logged in ends with no report.", file=sys.stderr)
+    _CLI_CHECKED.append(True)
 
 def load_spec():
     if not PIPELINE_SPEC.exists():
@@ -140,6 +199,7 @@ def run_stage(manifest, label, jobs, expected):
     """A one-off stage: snapshot, the agents of `jobs` ([(id, agent type, prompt[, entity])]) in parallel, ownership
     check. The id names the report, the summary line and the ledger entry; the entity (default: the id) is the zone."""
     cfg, spec = load_config(), load_spec()
+    require_cli(cfg)
     (STATE / "runs").mkdir(parents=True, exist_ok=True)
     snapshot(label)
     runs = pipeline_module().threaded([
@@ -255,6 +315,7 @@ def fix_defects(spec, wp_id, include_all=False, reports=None, waivers=()):
 
 def run_wave(manifest, wave, only=None, fix=False, include_all=False):
     cfg, spec = load_config(), load_spec()
+    require_cli(cfg)
     wave_wps = sorted(stage_owners(manifest, wave), key=lambda w: w["id"])
     if only:
         unknown = set(only) - {wp["id"] for wp in wave_wps}
@@ -293,6 +354,7 @@ def run_wave(manifest, wave, only=None, fix=False, include_all=False):
 def run_acceptance(manifest):
     if not at_entity(manifest)["command"]:
         die("The manifest has no 'acceptance' section: there is no wave 0 to launch.")
+    require_cli(load_config())
     write_briefs(manifest)
     run_stage(manifest, "acceptance", [("AT", "test-author", render_prompt(manifest, "test_author", "AT"))], "DONE")
 
@@ -447,6 +509,7 @@ def run_pipeline(manifest, args):
         done = json.loads(PIPELINE_STATE.read_text(encoding="utf-8")).get("completed_waves", [])
         start_wave = max(done) + 1 if done else None
     pipeline, spec, cfg = pipeline_module(), load_spec(), load_config()
+    require_cli(cfg)
     STATE.mkdir(parents=True, exist_ok=True)
     (STATE / "runs").mkdir(parents=True, exist_ok=True)
     counter = iter(range(1, 10 ** 6))

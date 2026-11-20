@@ -2,8 +2,11 @@
 on writes, the heartbeat, and hooks-check. It fails closed: inside an agent, any error blocks.
 """
 import json
+import ntpath
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -70,9 +73,15 @@ HOOKS_DEAD_MSG = (
     "The guardrail hook (`agentic.py hook`) did not run for this call, so no guardrail of the flow is active in this "
     "session. Known causes: a cloud session with several repositories attached, or a thread inside a Claude project "
     "(Claude Code does not read the repository's hooks there); `disableAllHooks` in a settings file; "
-    "Windows without Git "
-    "for Windows. The fallback mode runs each agent as `claude -p`, which does load the repository's hooks: "
-    "`/implement fallback`. Or open a session with this repository alone.")
+    "Windows where Claude Code does not find Git Bash (installed outside Program Files: `agentic.py doctor --fix` "
+    "writes CLAUDE_CODE_GIT_BASH_PATH; then restart Claude Code), or with python3 missing or the Microsoft Store stub "
+    "in the shell that runs hooks; a git worktree whose hook writes its heartbeat under another root. The "
+    "fallback mode runs each agent as `claude -p`, which does load the repository's hooks: `/implement fallback`. "
+    "Or open a session with this repository alone.")
+GIT_TIMEOUT_S = 10  # a git query of the diagnosis; it never blocks hooks-check for long
+# Where Git for Windows installs for every user; Claude Code finds Git Bash there without being told.
+DEFAULT_GIT_BASH = ("C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Program Files (x86)\\Git\\bin\\bash.exe")
+GIT_BASH_VAR = "CLAUDE_CODE_GIT_BASH_PATH"
 
 
 # ---------- claims and refusals ----------
@@ -342,6 +351,151 @@ def hooks_static_problem():
             return f"disableAllHooks is true in .claude/{name}"
     return None
 
+def _json_file(path):
+    """A JSON file's content, or None when it is missing, unreadable or not JSON."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+    except (OSError, ValueError):
+        return None
+
+def _declares_hook(data):
+    """The settings declare the flow's PreToolUse hook; False for any other shape."""
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    entries = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
+    if not isinstance(entries, list):
+        return False
+    try:
+        return bool(flow_hooks([e for e in entries if isinstance(e, dict)]))
+    except (AttributeError, TypeError):
+        return False
+
+def _settings_data():
+    """[(path, parsed JSON or None)] for the project's settings, its local settings and the user's settings."""
+    paths = [ROOT / ".claude" / "settings.json", ROOT / ".claude" / "settings.local.json",
+             Path.home() / ".claude" / "settings.json"]
+    return [(path, _json_file(path)) for path in paths]
+
+def _settings_entries(settings=None):
+    entries = []
+    for path, data in settings if settings is not None else _settings_data():
+        entries.append({"path": str(path), "exists": path.is_file(), "declares_hook": _declares_hook(data),
+                        "disable_all_hooks": isinstance(data, dict) and data.get("disableAllHooks") is True})
+    return entries
+
+def _settings_envs(settings):
+    return [data.get("env") for _, data in settings if isinstance(data, dict)]
+
+def _derived_git_bash(git):
+    """The bash.exe of the Git for Windows that owns this git.exe: <root>\\cmd, <root>\\bin or <root>\\mingw64\\bin."""
+    folder = ntpath.dirname(git)
+    if ntpath.basename(folder).lower() in ("cmd", "bin"):
+        root = ntpath.dirname(folder)
+        if ntpath.basename(root).lower() == "mingw64":
+            root = ntpath.dirname(root)
+        return ntpath.join(root, "bin", "bash.exe")
+    return None
+
+def _configured_git_bash(environ, settings_envs):
+    found = [environ.get(GIT_BASH_VAR)] + [e.get(GIT_BASH_VAR) for e in settings_envs if isinstance(e, dict)]
+    return next((v for v in found if isinstance(v, str) and v.strip()), None)
+
+def git_bash_state(is_windows=None, environ=None, settings_envs=None, which=shutil.which, exists=os.path.isfile):
+    """Whether Claude Code can find Git Bash on Windows (None elsewhere): {"configured", "default", "derived",
+    "needs_path", "missing"}. Defaults: compat.IS_WINDOWS, os.environ and the env objects of the three settings
+    files. Never raises."""
+    if not (compat.IS_WINDOWS if is_windows is None else is_windows):
+        return None
+    try:
+        envs = _settings_envs(_settings_data()) if settings_envs is None else settings_envs
+        configured = _configured_git_bash(os.environ if environ is None else environ, envs)
+        default = next((p for p in DEFAULT_GIT_BASH if exists(p)), None)
+        git = which("git")
+        candidate = _derived_git_bash(git) if isinstance(git, str) else None
+        derived = candidate if candidate and exists(candidate) else None
+    except (OSError, ValueError, TypeError, AttributeError):
+        configured = default = derived = None
+    unset = not configured and not default
+    return {"configured": configured, "default": default, "derived": derived,
+            "needs_path": unset and derived is not None, "missing": unset and derived is None}
+
+def _hook_command():
+    data = _json_file(ROOT / ".claude" / "settings.json")
+    if not _declares_hook(data):
+        return None
+    return flow_hooks([e for e in data["hooks"]["PreToolUse"] if isinstance(e, dict)])[0][1].get("command")
+
+def _git(*args, cwd=None):
+    """A git query's output, stripped, or None when git is missing or fails."""
+    try:
+        r = subprocess.run(["git", *args], cwd=cwd or ROOT, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", stdin=subprocess.DEVNULL, timeout=GIT_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+def _worktree():
+    """{"inside", "main"}: ROOT is a linked worktree when its git dir is not the common one."""
+    git_dir, common = _git("rev-parse", "--git-dir"), _git("rev-parse", "--git-common-dir")
+    if not git_dir or not common:
+        return {"inside": False, "main": None}
+    git_dir, common = (ROOT / git_dir).resolve(), (ROOT / common).resolve()
+    inside = git_dir != common
+    return {"inside": inside, "main": str(common.parent) if inside else None}
+
+def _heartbeat(root):
+    path = root / ".claude" / "state" / "hook-seen.json"
+    data = _json_file(path)
+    ts = data.get("ts") if isinstance(data, dict) else None
+    age = round(time.time() - ts, 1) if isinstance(ts, (int, float)) and not isinstance(ts, bool) else None
+    return {"path": str(path), "exists": path.is_file(), "age_s": age}
+
+def _heartbeats(worktree):
+    """ROOT's heartbeat first, then the main checkout's (from a worktree) and cwd's top level's, without repeats."""
+    roots = [ROOT.resolve()]
+    top = _git("rev-parse", "--show-toplevel", cwd=Path.cwd())
+    for candidate in (worktree["main"], top):
+        if candidate and Path(candidate).resolve() not in roots:
+            roots.append(Path(candidate).resolve())
+    return [_heartbeat(root) for root in roots]
+
+def _git_bash_hints(state):
+    if not state:
+        return []
+    if state["needs_path"]:
+        return [f"Claude Code may not find Git Bash (it is at {state['derived']}, outside Program Files): without it "
+                "hooks run in PowerShell and the hook command breaks. Run `python3 .claude/bin/agentic.py doctor "
+                "--fix` (it writes CLAUDE_CODE_GIT_BASH_PATH to .claude/settings.local.json) and restart Claude Code"]
+    if state["missing"]:
+        return ["Git Bash was not found: install Git for Windows, or set CLAUDE_CODE_GIT_BASH_PATH"]
+    return []
+
+def _hints(d):
+    hints = _git_bash_hints(d.get("git_bash"))
+    if d["python3"] is None:
+        hints.append("python3 is not on the PATH of this shell: the hook command (python3 ...) cannot start")
+    elif "windowsapps" in d["python3"].lower():
+        hints.append(f"python3 resolves to the Microsoft Store stub ({d['python3']}): install Python, or turn off "
+                     "the app execution alias")
+    hints += [f"disableAllHooks is true in {s['path']}" for s in d["settings"] if s["disable_all_hooks"]]
+    if not any(s["declares_hook"] for s in d["settings"]):
+        hints.append("no settings file read here declares the flow's hook")
+    hints += [f"the hook ran, but wrote its heartbeat in {h['path']}: the hook and this command see different "
+              "project roots (a git worktree?)" for h in d["heartbeats"][1:]
+              if h["age_s"] is not None and h["age_s"] <= HOOK_SEEN_MAX_AGE_S]
+    return hints or ["the session did not run the project's hooks: check /hooks in this session and that the "
+                     "workspace is trusted"]
+
+def hook_diagnosis():
+    """What tells apart why the hook looks dead: the settings, the hook command, the roots, the heartbeats, the
+    worktree and python3, with hints. Read-only; never raises."""
+    worktree, settings = _worktree(), _settings_data()
+    d = {"cwd": str(Path.cwd().resolve()), "project_dir": os.environ.get("CLAUDE_PROJECT_DIR"),
+         "root": str(ROOT.resolve()), "settings": _settings_entries(settings), "hook_command": _hook_command(),
+         "heartbeats": _heartbeats(worktree), "worktree": worktree, "python3": shutil.which("python3"),
+         "git_bash": git_bash_state(settings_envs=_settings_envs(settings))}
+    d["hints"] = _hints(d)
+    return d
+
 def hooks_check():
     """hooks-check: inside a Claude tool call (CLAUDECODE), the hook must have fired for it; elsewhere, the project
     settings must configure it. Prints one JSON line; returns 0 or 3."""
@@ -352,9 +506,12 @@ def hooks_check():
         if fresh:
             print(json.dumps({"ok": True, "mode": "live", "seen": ts}))
             return 0
+        diagnosis = hook_diagnosis()
         print(json.dumps({"ok": False, "mode": "live", "seen": ts if isinstance(ts, (int, float)) else None,
-                          "reason": "the guardrail hook did not run for this call"}))
+                          "reason": "the guardrail hook did not run for this call", "diagnosis": diagnosis}))
         print(HOOKS_DEAD_MSG, file=sys.stderr)
+        for hint in diagnosis["hints"]:
+            print(f"- {hint}", file=sys.stderr)
         return 3
     problem = hooks_static_problem()
     if problem:
