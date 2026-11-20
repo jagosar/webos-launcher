@@ -1,13 +1,19 @@
 """Launching the agents: one `claude -p` per agent with its schema and permissions, the one-off run-* commands, the
 workflow's seq, the fallback pipeline, pipeline-plan, and finish.
 """
+import http.client
 import json
 import os
 import re
 import shlex
 import shutil
+import socket
+import ssl
 import subprocess
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -48,6 +54,11 @@ PIPELINE_SPEC = ROOT / ".claude" / "workflows" / "pipeline-spec.json"
 
 AUTH_TIMEOUT_S = 60  # `claude auth status` answers at once; past this the status is unreadable, not a failure
 _CLI_CHECKED = []  # set once require_cli passed or warned: one check per process
+NETWORK_TIMEOUT_S = 10  # the fallback's reachability check of the API, before any agent
+DEFAULT_API_URL = "https://api.anthropic.com"
+PROXY_VARS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy",
+              "NO_PROXY", "no_proxy")
+PROXY_REQUIRED = "proxy asks for credentials (407)"
 
 FENCED_JSON_RE = re.compile(r"```json[ \t]*\n(.*?)\n```", re.S)
 
@@ -86,6 +97,67 @@ def _inherited(cfg):
     more = len(names) - INHERITED_SHOWN
     return (shown + (f" and {more} more" if more > 0 else "")) if names else "none"
 
+def _api_url(env):
+    return env.get("ANTHROPIC_BASE_URL") or DEFAULT_API_URL
+
+def _proxy_names(env):
+    """The proxy variables set in env, by name only (their values may hold credentials), or "none"."""
+    names = [n for n in PROXY_VARS if env.get(n)]
+    return ", ".join(names) if names else "none"
+
+def _proxies(env, host):
+    """ProxyHandler's mapping from env, as urllib reads it (lower case first); {} when NO_PROXY covers host."""
+    def first(*names):
+        return next((env[n] for n in names if env.get(n)), None)
+    no_proxy = first("no_proxy", "NO_PROXY")
+    if no_proxy and urllib.request.proxy_bypass_environment(host, {"no": no_proxy}):
+        return {}
+    every = first("all_proxy", "ALL_PROXY")  # ProxyHandler has no "all" key
+    found = {"https": first("https_proxy", "HTTPS_PROXY") or every, "http": first("http_proxy", "HTTP_PROXY") or every}
+    return {scheme: url for scheme, url in found.items() if url}
+
+def _outcome(error):
+    """(reachable, reason) for what the request raised; the reason never holds a URL or a credential."""
+    if isinstance(error, urllib.error.HTTPError):
+        return (False, PROXY_REQUIRED) if error.code == 407 else (True, "")
+    reason = error.reason if isinstance(error, urllib.error.URLError) else error
+    if "Tunnel connection failed: 407" in str(reason):  # an https URL through HTTPS_PROXY
+        return False, PROXY_REQUIRED
+    if isinstance(reason, ssl.SSLError):  # a TLS peer answered; Python may lack a proxy CA that the CLI has
+        return True, ""
+    for kind, text in ((socket.gaierror, "name not resolved"), (ConnectionRefusedError, "connection refused"),
+                       ((socket.timeout, TimeoutError), "timed out")):
+        if isinstance(reason, kind):
+            return False, text
+    return False, "connection failed"
+
+def _reachable(url, env, opener=None):
+    """(True, "") when a HEAD request to url gets any answer but a 407, through env's proxies; else (False,
+    reason). opener(request, timeout=...) is injectable for tests."""
+    if opener is None:
+        handler = urllib.request.ProxyHandler(_proxies(env, urllib.parse.urlsplit(url).hostname or ""))
+        opener = urllib.request.build_opener(handler).open
+    try:
+        with opener(urllib.request.Request(url, method="HEAD"), timeout=NETWORK_TIMEOUT_S):
+            return True, ""
+    except (OSError, http.client.HTTPException, ValueError) as e:  # URLError and HTTPError are OSErrors
+        return _outcome(e)
+
+def _require_network(cfg, status):
+    """With the first-party API only: stop before any agent when its host cannot be reached."""
+    if status.get("apiProvider") != "firstParty":
+        return
+    env = child_env(cfg)
+    url = _api_url(env)
+    ok, reason = _reachable(url, env)
+    if ok:
+        return
+    host = urllib.parse.urlsplit(url).hostname or "the API"
+    origin = " (from ANTHROPIC_BASE_URL)" if env.get("ANTHROPIC_BASE_URL") else ""
+    die(f"The fallback cannot reach the API at {host}{origin}: {reason}, so every agent would fail. A terminal that "
+        "did not inherit your proxy settings is the usual cause: set HTTPS_PROXY (and NO_PROXY) as in a shell where "
+        f"`claude` works, then try again. Proxy variables set now: {_proxy_names(env)}.")
+
 def require_cli(cfg):
     """Once per process, before any agent and any state: the agents' binary (AGENTIC_CLAUDE or "claude") must exist,
     and `auth status` must not report it logged out. An unreadable status warns and goes on."""
@@ -107,6 +179,8 @@ def require_cli(cfg):
     if status is None:
         print(f"[agentic] could not read the login status of {binary} (auth status): going on; an agent that is not "
               "logged in ends with no report.", file=sys.stderr)
+    else:
+        _require_network(cfg, status)
     _CLI_CHECKED.append(True)
 
 def load_spec():

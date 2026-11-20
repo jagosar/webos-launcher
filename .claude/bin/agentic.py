@@ -56,6 +56,9 @@ Subcommands:
   stop [ID...]        Stops the running agents (all of them if none is given) and records it in the ledger.
   hook                PreToolUse hook (reads JSON from stdin).
   hooks-check         JSON: whether the guardrail hook runs in this session (exit 3 if it does not).
+  sessions-check [--ignore ID]...
+                      JSON: exit 3 if another Claude Code session used this folder in the last 10 minutes; --ignore
+                      forgets sessions the user confirmed closed.
   quality [--init|--update]
                       The clean-code ratchet: function length, nesting, file size and long lines against
                       .claude/quality-baseline.json (exit 3 if something got worse). --init creates it, --update lowers it.
@@ -94,7 +97,7 @@ from launch import (  # noqa: E402
     load_spec, pipeline_plan, render_prompt, run_acceptance, run_docs, run_pipeline, run_qa,
     run_review, run_steps, run_wave, seq, structured_report, write_briefs,
 )
-from guardrail import hook, hooks_check  # noqa: E402
+from guardrail import hook, hooks_check, sessions_check  # noqa: E402
 
 __all__ = [
     "ROOT", "QUALITY_BASELINE", "SKIP_DIRS", "USAGE", "is_flow_repo", "maintainer_mode",
@@ -112,6 +115,16 @@ def cmd_hook(args):
 
 def cmd_hooks_check(args):
     return hooks_check()
+
+
+def cmd_sessions_check(args):
+    ignore, rest = [], list(args)
+    while rest:
+        if rest[0] != "--ignore" or len(rest) < 2 or rest[1].startswith("-"):
+            die("Uso: sessions-check [--ignore ID]...")
+        ignore.append(rest[1])
+        rest = rest[2:]
+    return sessions_check(ignore)
 
 
 def cmd_claim(args):
@@ -376,7 +389,7 @@ COMMANDS = {
     "install": cmd_install, "flow-history": cmd_flow_history, "release-notes": cmd_release_notes,
     "run-acceptance": cmd_run_acceptance, "run-review": cmd_run_review, "acceptance": cmd_acceptance,
     "snapshot": cmd_snapshot, "check-wave": cmd_check_wave, "run-wave": cmd_run_wave, "doctor": cmd_doctor,
-    "plan-picture": cmd_plan_picture,
+    "plan-picture": cmd_plan_picture, "sessions-check": cmd_sessions_check,
 }
 
 

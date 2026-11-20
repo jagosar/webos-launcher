@@ -16,13 +16,16 @@ AT_SECTIONS = ("1", "2", "3", "4b", "5", "6", "7", "9")
 
 
 def split(text):
-    """[(kind, key, lines)]: the preamble, then one entry per '## N. ' section. Fenced lines never start a section."""
+    """[(kind, key, lines)]: the preamble, then one entry per '## N. ' section and one per annex (any other '## '
+    heading, keyed by its text). Fenced lines never start one. Joining every part's lines gives back the text."""
     parts, fenced = [("pre", None, [])], False
     for line in text.splitlines(keepends=True):
         fenced ^= line.lstrip().startswith(("```", "~~~"))
         m = None if fenced else SECTION_RE.match(line)
         if m:
             parts.append(("section", m.group(1), []))
+        elif not fenced and line.startswith("## "):
+            parts.append(("annex", line[3:].strip(), []))
         parts[-1][2].append(line)
     return parts
 
@@ -91,7 +94,7 @@ def slice_architecture(text, ident, manifest):
            "Read architecture.md only if this brief points to something it does not contain.\n\n"]
     seen_eight = False
     for kind, key, lines in split(MANIFEST_RE.sub("", text)):
-        if kind == "pre" or key in keep:
+        if kind in ("pre", "annex") or key in keep:  # an annex may hold what any criterion counts against
             out += lines
         elif key == "8":
             seen_eight = True

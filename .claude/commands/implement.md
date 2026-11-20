@@ -10,16 +10,17 @@ You are the flow's launcher. You write no code and no tests, and you do not inte
 
 Arguments: $ARGUMENTS
 - A number: resume from that wave, skipping wave 0.
-- `fallback`: use the fallback mode without checking anything.
+- `fallback`: use the fallback mode without checking whether workflows are available. The pre-flight of section 1, `sessions-check` included, runs in both modes.
 
 # 1. Pre-flight validation
 
 1. Run `python3 .claude/bin/agentic.py hooks-check`. If it exits 3, the guardrail hook does not run in this session: stop, show the user its message and the hints it prints (its JSON's `diagnosis` holds Git Bash on Windows, the settings it read, the roots, the heartbeats it found, the worktree and what `python3` resolves to). On Windows the usual cause is that Claude Code does not find Git Bash: `python3 .claude/bin/agentic.py doctor --fix` writes `CLAUDE_CODE_GIT_BASH_PATH` to `.claude/settings.local.json`; then restart Claude Code and check again. Otherwise offer `/implement fallback` (each agent runs as `claude -p`, which loads the repository's hooks) or a session with this repository alone. Do not launch the native workflow without guardrails.
-2. Run `python3 .claude/bin/agentic.py validate`. If it fails, stop and tell the user to go back to `/architect`.
-3. If section 11 of `architecture.md` blocks any WP, stop.
-4. If the design is not committed, recommend committing it before starting.
-5. Run `python3 .claude/bin/agentic.py sync-permissions`. It adds to `.claude/settings.local.json` the permissions the agents need (tests, verification), so the workflow does not stop to ask.
-6. Run `python3 .claude/bin/agentic.py rules-sync`. It leaves the common rules and the `stack`'s in `.claude/rules/agentic/`, which the agents receive in their prompt.
+2. Run `python3 .claude/bin/agentic.py sessions-check`. If it exits 3, another Claude Code session used this folder in the last 10 minutes, and a session that commits, switches branches or edits files here stops the run. Show the user the sessions it lists (`others`) and ask whether they are closed: a restart of Claude Code or `/clear` leaves the previous session's calls behind under another id. If the user says they are, run `python3 .claude/bin/agentic.py sessions-check --ignore <id>` for each and go on. Otherwise stop and recommend a git worktree of its own for this cycle (`git worktree add ../<folder> -b <branch>`).
+3. Run `python3 .claude/bin/agentic.py validate`. If it fails, stop and tell the user to go back to `/architect`.
+4. If section 11 of `architecture.md` blocks any WP, stop.
+5. If the design is not committed, recommend committing it before starting.
+6. Run `python3 .claude/bin/agentic.py sync-permissions`. It adds to `.claude/settings.local.json` the permissions the agents need (tests, verification), so the workflow does not stop to ask.
+7. Run `python3 .claude/bin/agentic.py rules-sync`. It leaves the common rules and the `stack`'s in `.claude/rules/agentic/`, which the agents receive in their prompt.
 
 # 2. Launch the workflow (the main path)
 
@@ -73,7 +74,7 @@ If `result` is `OK`, propose the commit messages (one per logical block, in the 
 
 # 4. Fallback mode (no workflows)
 
-It needs the `claude` CLI: the one on the `PATH`, or the command in `AGENTIC_CLAUDE` (a full path, for example). Before the first agent it runs `<cli> auth status --json` once: a CLI that is missing or reports no login stops the run with a message, and an unreadable status only warns. Claude Desktop bundles its own CLI but does not put it on the `PATH`: point `AGENTIC_CLAUDE` at it. A CLI started from inside a Claude Code session inherits that session's `CLAUDE_*` and `ANTHROPIC_*` variables; the flow drops only `CLAUDE_CODE_SIMPLE` (it stops the saved login from being read), and when the CLI still reports no login the message lists the inherited variable names to look at. On Windows the agents' CLI also reads `CLAUDE_CODE_GIT_BASH_PATH` from `.claude/settings.local.json` (`doctor --fix`). It is one command that runs the same pipeline as the workflow (wave 0 with its test audit, the waves, verification, review with adversarial verification, QA, fixes, documentation), with one `claude -p` process per agent and the same schemas, prompts and limits:
+It needs the `claude` CLI: the one on the `PATH`, or the command in `AGENTIC_CLAUDE` (a full path, for example). Before the first agent it runs `<cli> auth status --json` once: a CLI that is missing or reports no login stops the run with a message, and an unreadable status only warns. When that status reports the first-party API (`apiProvider: "firstParty"`), it also checks that the API host (`ANTHROPIC_BASE_URL`, or the default) answers, through the agents' proxy variables: a name that does not resolve, a refused connection, a timeout or a proxy asking for credentials stops the run before any agent, naming the proxy variables that are set (never their values). Claude Desktop bundles its own CLI but does not put it on the `PATH`: point `AGENTIC_CLAUDE` at it. A CLI started from inside a Claude Code session inherits that session's `CLAUDE_*` and `ANTHROPIC_*` variables; the flow drops only `CLAUDE_CODE_SIMPLE` (it stops the saved login from being read), and when the CLI still reports no login the message lists the inherited variable names to look at. On Windows the agents' CLI also reads `CLAUDE_CODE_GIT_BASH_PATH` from `.claude/settings.local.json` (`doctor --fix`). It is one command that runs the same pipeline as the workflow (wave 0 with its test audit, the waves, verification, review with adversarial verification, QA, fixes, documentation), with one `claude -p` process per agent and the same schemas, prompts and limits:
 
 ```
 python3 .claude/bin/agentic.py run-pipeline            # or: --start-wave N  |  --resume

@@ -51,6 +51,7 @@ def claude_command(fake_py) -> str:
 #   FAKE_AUTH    how `auth status` answers: unset or "in" (logged in), "out" (authMethod none, exit 1),
 #   "none" (no such command). Each auth call adds a line to FAKE_LOG_DIR/auth.log: "ANTHROPIC_API_KEY" if it
 #   saw that variable, else "-"
+#   FAKE_PROVIDER  the "apiProvider" a logged-in `auth status` reports; unset, none (no network check)
 # Every answer names the session "s-<the fake's process id>"; the log records that pid.
 FAKE_CLAUDE = """\
 import json, os, re, sys, time
@@ -62,7 +63,10 @@ if "auth" in argv and "status" in argv:  # the fallback's login check: answered 
     if mode == "none":
         sys.stderr.write("error: unknown command 'auth'\\n")
         sys.exit(1)
-    print(json.dumps({"authMethod": "none"} if mode == "out" else {"loggedIn": True, "authMethod": "fake"}))
+    status = {"loggedIn": True, "authMethod": "fake"}
+    if os.environ.get("FAKE_PROVIDER"):
+        status["apiProvider"] = os.environ["FAKE_PROVIDER"]
+    print(json.dumps({"authMethod": "none"} if mode == "out" else status))
     sys.exit(0 if mode != "out" else 1)
 prompt = sys.stdin.buffer.read().decode("utf-8")
 agent = argv[argv.index("--agent") + 1]

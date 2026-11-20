@@ -147,6 +147,19 @@ class ProvenanceTests(unittest.TestCase):
         ok = self.section("| a | `.claude/bin/agentic.py:1-2` | read |")
         self.assertEqual(manifest_check.provenance_problems(ok), ([], []))
 
+    def test_dotfiles_and_extensionless_files_are_references(self):
+        # Design 0024 (issue 123): a leading dot, or no extension when the file exists.
+        self.assertTrue(manifest_check.reference_candidate(".github/workflows/agentic-flow-ci.yml:3"))
+        self.assertTrue(manifest_check.reference_candidate(".gitignore:1-8"))
+        self.assertFalse(manifest_check.reference_candidate("step:3"))
+        self.assertTrue(manifest_check.reference_candidate("../etc:1"), "a candidate, which reference_ok refuses")
+        self.assertFalse(manifest_check.reference_ok("../etc:1"))
+        self.assertFalse(manifest_check.reference_candidate(".gitignore"), "a line number is required")
+
+    def test_an_escaped_pipe_outside_backticks_is_not_a_separator(self):
+        self.assertEqual(manifest_check.table_cells("| `a` \\| `b` | read |"), ["`a` \\| `b`", "read"])
+        self.assertEqual(manifest_check.table_cells("| a\\|b | c"), ["a\\|b", "c"], "no trailing pipe")
+
     def test_a_fenced_heading_does_not_start_section_4b(self):
         text = "# A\n```\n## 4b. not a section\n| a | b | Source |\n|---|---|---|\n| x | y | z |\n```\n"
         self.assertEqual(manifest_check.provenance_problems(text), ([], []))

@@ -97,12 +97,36 @@ class FindingTests(DoctorCase):
         self.assertEqual(self.doctor()[1]["findings"], [])
 
     def test_upgrade_files_are_counted_recursively(self):
-        self.repo.write(".claude/state/upgrade/.claude/agents/a.md")
-        self.repo.write(".claude/state/upgrade/.claude/bin/b.py")
+        # Live copies: the record knows the path and the installed file is not the recorded one (design 0024).
+        self.repo.write(".claude/agentic-install.json", json.dumps(
+            {"version": version(), "files": {".claude/agents/a.md": "old", ".claude/bin/b.py": "old"}}))
+        for rel in (".claude/agents/a.md", ".claude/bin/b.py"):
+            self.repo.write(rel, "edited")
+            self.repo.write(".claude/state/upgrade/" + rel, "new")
         code, out = self.doctor()
         self.assertEqual((code, out["ok"]), (0, True))
         self.assertEqual(out["findings"][0]["message"],
                          "2 new version(s) kept beside your edits in .claude/state/upgrade/")
+
+    def test_copies_the_record_does_not_know_or_that_lost_their_edit_are_stale(self):
+        import compat
+        self.repo.write(".claude/agents/a.md", "intact")
+        digest = compat.content_hash(self.repo.dir / ".claude/agents/a.md")
+        self.repo.write(".claude/agentic-install.json", json.dumps(
+            {"version": version(), "files": {".claude/agents/a.md": digest, ".claude/agents/gone.md": "x"}}))
+        for rel in (".claude/agents/a.md", ".claude/agents/gone.md", "unknown.md"):
+            self.repo.write(".claude/state/upgrade/" + rel, "new")
+        found = self.finding("upgrade-stale")
+        self.assertEqual((found["severity"], found["fix"]), ("auto", "delete them"))
+        self.assertTrue(found["message"].startswith("3 kept version(s)"), found)
+        self.assertNotIn("upgrade-pending", [f["code"] for f in self.doctor()[1]["findings"]])
+
+    def test_without_a_readable_record_every_copy_is_live(self):
+        self.repo.write(".claude/agentic-install.json", "{not json")
+        self.repo.write(".claude/state/upgrade/x.md", "new")
+        codes = [f["code"] for f in self.doctor()[1]["findings"]]
+        self.assertIn("upgrade-pending", codes)
+        self.assertNotIn("upgrade-stale", codes)
 
 
 class FixTests(DoctorCase):
@@ -222,6 +246,11 @@ class ProjectStateTests(ProjectStateCase):
         self.assertEqual((repo.dir / ".claude/state").exists(), had_state, "doctor creates nothing under state")
         self.assertFalse((repo.dir / ".claude/state/ledger.json").exists())
         repo.write(".claude/state/upgrade/a.md", "x")
+        code, out = self.doctor(repo)
+        self.assertEqual((code, out["ok"]), (3, False), "a copy the record does not know is stale (design 0024)")
+        self.assertEqual([f["code"] for f in out["findings"]], ["upgrade-stale"])
+        repo.write("a.md", "edited")
+        repo.write(".claude/agentic-install.json", json.dumps({"version": version(), "files": {"a.md": "old"}}))
         code, out = self.doctor(repo)
         self.assertEqual((code, out["ok"]), (0, True))
         self.assertEqual([f["code"] for f in out["findings"]], ["upgrade-pending"])

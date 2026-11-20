@@ -136,6 +136,28 @@ class HooksCheckTests(RepoCase):
         self.assertIn("disableAllHooks", out["reason"])
 
 
+class SessionRecordTests(RepoCase):
+    """Design 0024 (issue 124): odd heartbeats and payloads never break the hook; sessions-check reads them."""
+
+    def test_a_malformed_sessions_value_or_session_id_starts_again(self):
+        self.put_seen({"ts": time.time(), "sessions": ["not", "a", "dict"]})
+        bash = {"tool_name": "Bash", "tool_input": {"command": "ls"}}
+        self.assertEqual(self.hook(dict(bash, session_id=["x"])).returncode, 0)
+        self.assertEqual(self.seen()["sessions"], {})
+        self.assertNotIn("session_id", self.seen())
+        self.put_seen({"ts": time.time(), "sessions": {"a": "yesterday", "b": time.time()}})
+        self.hook(dict(bash, session_id="c"))
+        self.assertEqual(sorted(self.seen()["sessions"]), ["b", "c"])
+
+    def test_sessions_check_without_a_heartbeat_is_not_checked(self):
+        env = {k: v for k, v in self.repo.env.items() if k != "CLAUDE_CODE_SESSION_ID"}
+        self.repo.env = env
+        r = self.repo.run("sessions-check", env={"CLAUDECODE": "1"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(json.loads(r.stdout.splitlines()[-1])["mode"], "not checked")
+        self.assertFalse((self.repo.dir / SEEN).exists(), "the check creates no heartbeat")
+
+
 class StageGuardTests(RepoCase):
     """From test_acceptance_v24 ac_004: a stage whose files changed with no flow-agent hook call fails."""
 
