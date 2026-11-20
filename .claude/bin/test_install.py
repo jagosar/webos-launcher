@@ -289,6 +289,47 @@ class SettingsTests(InstallCase):
 
 
 
+class InstalledCopyTests(InstallCase):
+    """2.16.1: a project installed from a clone has no .claude-plugin/plugin.json, and its settings.local.json
+    (permissions, the Git Bash path) belongs to one machine."""
+
+    def installed(self):
+        t = self.target({}, "installed")
+        r = self.install(t)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse((t / ".claude-plugin/plugin.json").exists(), "install never copies the plugin manifest")
+        return t
+
+    def run_flow(self, target, *args):
+        return subprocess.run([sys.executable, str(target / ".claude/bin/agentic.py"), *args], cwd=target,
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              env=dict(self.env, CLAUDE_PROJECT_DIR=str(target)))
+
+    def test_install_ignores_settings_local_json(self):
+        lines = (self.installed() / ".gitignore").read_text(encoding="utf-8").splitlines()
+        self.assertIn(".claude/settings.local.json", lines)
+
+    def test_doctor_in_an_installed_copy_reports_no_version_mismatch(self):
+        r = self.run_flow(self.installed(), "doctor")
+        codes = [f["code"] for f in json.loads(r.stdout.splitlines()[-1])["findings"]]
+        self.assertNotIn("install-record", codes, r.stdout + r.stderr)
+
+    def version_seen(self, target):
+        probe = "import sys; sys.path.insert(0, sys.argv[1]); import installer; print(installer.flow_version())"
+        out = subprocess.run([sys.executable, "-c", probe, str(target / ".claude/bin")], cwd=target,
+                             capture_output=True, text=True, env=dict(self.env, CLAUDE_PROJECT_DIR=str(target)))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout.strip()
+
+    def test_an_installed_copy_reads_its_version_from_the_install_record(self):
+        self.assertEqual(self.version_seen(self.installed()), "1.1.0")
+
+    def test_without_a_manifest_or_a_readable_record_the_version_is_dev(self):
+        t = self.installed()
+        (t / ".claude/agentic-install.json").write_text("{not json", encoding="utf-8")
+        self.assertEqual(self.version_seen(t), "dev")
+
+
 class ShippedModulesTests(unittest.TestCase):
     """From test_acceptance_v212 (AC-007): every module of the flow beside agentic.py is installed in projects."""
 

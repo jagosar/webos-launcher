@@ -153,6 +153,12 @@ NOTES = {
         "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
         "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
     ],
+    "2.16.1": [
+        "install adds .claude/settings.local.json to .gitignore: it holds one machine's permissions and, after "
+        "doctor --fix, its Git Bash path, so it is never committed by accident.",
+        "In a project installed from a clone (no .claude-plugin/plugin.json), the flow reads its version from the "
+        "install record: doctor no longer reports \"the installed flow is dev\".",
+    ],
     "2.16.0": [
         "When hooks-check fails inside a session, its JSON carries a diagnosis and it prints one hint per line: on "
         "Windows whether Claude Code can find Git Bash, the settings files that declare the hook (and any "

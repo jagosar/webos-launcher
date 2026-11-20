@@ -1,3 +1,5 @@
 .claude/state/
 __pycache__/
 .agentic-result.json
+
+.claude/settings.local.json
