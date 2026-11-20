@@ -153,6 +153,14 @@ NOTES = {
         "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
         "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
     ],
+    "2.18.0": [
+        "The guardrail hook loads only the guard: it no longer imports the launcher, the installer or the network "
+        "modules on every tool call (100 to 58 ms per call where it was measured), and a test pins that import "
+        "budget.",
+        "The flow's own tests keep it lean: the standard library only, no debt marker without an issue, and "
+        ".claude/flow-budget.json, a budget of code lines and prompt bytes in the flow's repository that a release "
+        "must raise, with a why, to grow, or lower when it shrinks. Projects are not affected.",
+    ],
     "2.17.0": [
         "Briefs keep annexes: any `## ` heading without a number (## Annex A, ## Anexo) is an annex that reaches "
         "every agent's brief; before, an annex after section 8, 10 or 11 never reached an agent.",
