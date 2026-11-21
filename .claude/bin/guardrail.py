@@ -27,6 +27,29 @@ CLAIM_RE = re.compile(r"\s*(?:(?:python3?|sh)\s+)?[\w./-]*agentic(?:\.py)?\s+cla
 
 # A write subcommand in the same command as `git`, even with options in front (`git -C . commit`)
 # or inside quotes (`sh -c "git commit"`). Requires a space before it so `src/add.py` is not mistaken.
+COMMAND_END_RE = re.compile(r"[;&|\n]")
+
+
+class InOrder:
+    """search(cmd): whether one command of the line (between ; & | and newlines) holds the patterns in this order.
+    One pass each, where a single regex with gaps between its parts backtracks for seconds on a long command."""
+
+    def __init__(self, *patterns):
+        self.patterns = [re.compile(p) for p in patterns]
+
+    def search(self, cmd):
+        return any(self._holds(part) for part in COMMAND_END_RE.split(cmd))
+
+    def _holds(self, part):
+        pos = 0
+        for rx in self.patterns:
+            m = rx.search(part, pos)
+            if not m:
+                return False
+            pos = m.end()
+        return True
+
+
 GIT_WRITE_RE = re.compile(
     r"\bgit\b[^;&|\n]*?\s[\"']?(commit|push|pull|fetch|checkout|switch|reset|rebase|merge|stash|branch|tag|restore|"
     r"clean|cherry-pick|revert|am|apply|config|remote|worktree|update-ref|update-index|filter-branch|gc|rm|mv|add|"
@@ -40,7 +63,7 @@ FORBIDDEN_BASH = [
                 r"\bcargo\s+add\b|\bgo\s+get\b"),
      "dependencies cannot be changed (section 3)"),
     (re.compile(r"(?:^|[\s\"'=])\.git[/\\]"), "git's own files (.git/) are not touched"),
-    (re.compile(r"\bagentic\.py\b[^;&|\n]*\bquality\b[^;&|\n]*\s--(?:init|update)\b"),
+    (InOrder(r"\bagentic\.py\b", r"\bquality\b", r"\s--(?:init|update)\b"),
      "the quality baseline is written only by a person (agentic.py quality --init/--update)"),
     # `claude` as the command (alone, or at the end of a path like /usr/bin/claude), never inside a path such as
     # .claude/bin or docs/claude-notes.md, which a -p flag later on the line (unittest's) does not make a session.
@@ -53,11 +76,37 @@ FORBIDDEN_BASH = [
 # git accepts an unambiguous prefix of a long option (--no-veri), short options together (-an) and configuration
 # through the environment (GIT_CONFIG_KEY_0=core.hooksPath).
 GIT_HOOK_BYPASS_RE = re.compile(
-    r"\bgit\b[^;&|\n]*?(\s--no-veri(?:f|fy)?\b|\s-c\s*[\"']?core\.hookspath=)"
+    r"\bgit\b[^;&|\n]*?(\s--no-veri(?:f|fy)?\b|\s(?:-c\s*|--config-env[=\s])[\"']?core\.hookspath[\"']?=)"
     r"|\bGIT_CONFIG_(?:KEY_\d+\s*=\s*[\"']?core\.hookspath\b|PARAMETERS\s*=[^\n]*core\.hookspath)", re.I)
 
-# Matched without the quoted text (QUOTED_RE blanks it first).
-GIT_COMMIT_N_RE = re.compile(r"\bgit\b[^;&|\n]*?\scommit\b[^;&|\n]*?\s-[a-zA-Z]*n[a-zA-Z]*\b")
+GIT_WORD_RE = re.compile(r"(?<![\w.-])git(?![\w.-])")
+GIT_VALUE_OPTIONS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env")
+SHORT_FLAGS_RE = re.compile(r"-([a-zA-Z]+)")
+COMMIT_VALUE_FLAGS = set("mFCcuSt")  # what follows one of these in a group of short flags is its value (-uno)
+
+
+def commit_skips_hooks(cmd):
+    """Whether a `git commit` of the line carries -n, alone or grouped (-an). `cmd` comes without its quoted text.
+    Only the subcommand counts (`git log --grep commit -n 5` is a log), found past git's own options."""
+    for part in COMMAND_END_RE.split(cmd):
+        for git in GIT_WORD_RE.finditer(part):
+            words = iter(part[git.end():].split())
+            for word in words:
+                if word in GIT_VALUE_OPTIONS:
+                    next(words, None)
+                elif not word.startswith("-"):
+                    break
+            else:
+                continue
+            if word == "commit" and any(_has_n(w) for w in words):
+                return True
+    return False
+
+
+def _has_n(word):
+    flags = SHORT_FLAGS_RE.fullmatch(word)
+    return bool(flags) and "n" in flags[1] and not COMMIT_VALUE_FLAGS & set(flags[1].partition("n")[0])
+
 
 MAX_CHECKED_COMMAND = 10_000  # longer agent commands are refused: the rules are regexes, and the hook has a time limit
 
@@ -210,11 +259,12 @@ def content_checks(owner_id, ent, rel, abs_path, tool, tinput):
 
 def universal_checks(tool, tinput, agent_id, owner_id):
     """What no agent may do, claimed or not: unverifiable commands and git hook bypasses."""
-    bash_cmd = tinput.get("command", "") if tool == "Bash" else ""
+    # A backslash at the end of a line continues the command on the next one.
+    bash_cmd = tinput.get("command", "").replace("\\\n", " ") if tool == "Bash" else ""
     if len(bash_cmd) > MAX_CHECKED_COMMAND and (agent_id or owner_id):
         block(f"a command longer than {MAX_CHECKED_COMMAND} characters cannot be checked: "
               "split it or use a script file.")
-    if bash_cmd and (GIT_HOOK_BYPASS_RE.search(bash_cmd) or GIT_COMMIT_N_RE.search(QUOTED_RE.sub("''", bash_cmd))):
+    if bash_cmd and (GIT_HOOK_BYPASS_RE.search(bash_cmd) or commit_skips_hooks(QUOTED_RE.sub("''", bash_cmd))):
         block("bypassing git hooks (--no-verify, commit -n, core.hooksPath) is not allowed for any agent. "
               "If a hook fails, fix the cause or ask the user to decide.")
 
@@ -276,8 +326,9 @@ def write_rules(data, owner_id, tool, tinput):
         block(f"{owner_id} does not exist in the manifest of architecture.md.")
     # No agent of the flow writes the plan, the flow's configuration, the decision archive or the generated
     # code map, even if its zone includes them by prefix (for example, "docs/").
-    if (rel == "architecture.md" or rel.startswith(ARCHIVE_DIR) or rel == codemap_path(manifest)
-            or flow_path_refused(rel)):
+    # Compared without case: on macOS and Windows docs/Architecture/ is the archive too.
+    if (rel == "architecture.md" or rel.casefold().startswith(ARCHIVE_DIR) or flow_path_refused(rel)
+            or rel.casefold() == (codemap_path(manifest) or "").casefold()):
         block(f"{owner_id}: {rel} is not written by any agent of the flow (plan, configuration, decision archive "
               "or generated map). If it has to change, return the blocked status your schema allows (BLOCKED for an "
               "implementer, BLOCKER for the others).")

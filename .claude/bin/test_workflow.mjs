@@ -314,12 +314,16 @@ test('absolute paths in the doc-updater report: count as changed', async () => {
   assert.ok(!result.pending.some(x => (x.problem || '').includes('not on disk')))
 })
 
-test('language rules: reach the agents that write or judge code', async () => {
+test('language rules: reach the agents that write code or judge it by them', async () => {
   const rules = ['.claude/rules/agentic/common.md', '.claude/rules/agentic/python.md']
   const { calls } = await simulate({ plan: { ...DOCS_PLAN, rules } })
-  for (const type of ['test-author', 'test-auditor', 'implementer', 'reviewer', 'standards-reviewer', 'qa', 'doc-updater']) {
+  for (const type of ['test-author', 'implementer', 'standards-reviewer', 'qa']) {
     const call = calls.find(c => c.type === type)
     assert.ok(call.prompt.includes(rules.join(', ')), `${type} does not receive the rules`)
+  }
+  // Their definitions say they do not judge by the rules: the Spec reviewer leaves them to the other axis.
+  for (const type of ['test-auditor', 'reviewer', 'doc-updater']) {
+    assert.ok(!calls.find(c => c.type === type).prompt.includes('Rules'), `${type} does not need the rules`)
   }
   assert.ok(!calls.find(c => c.type === 'gatekeeper').prompt.includes('Rules'), 'the gatekeeper does not need them')
   const none = await simulate({ plan: { rules: [] } })
@@ -567,6 +571,7 @@ const summarize = ({ result, calls, gates, gateCalls }) => {
     verification_failures: (result.verification_failures || []).length,
     review_axes: reviewAxes(result.review), rules: result.rules ?? null,
     agent_calls: result.agent_calls, models: models.sort(), re_review: reReviewCounts(result.review),
+    qa_passes: (result.qa_passes || []).map(p => p.mode),
     environment_retries: (result.environment_retries || []).map(r => ({ cmd: r.cmd, exit_code: r.exit_code })),
     untested: (result.pending || []).filter(p => p.kind === 'tests not run').map(p => ({ wp: p.wp, claim: p.claim, fact: p.fact })),
   }

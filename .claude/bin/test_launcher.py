@@ -257,7 +257,8 @@ class ResumingAgentTests(unittest.TestCase):
         agent("p", "implementer", "WP-01", "WP-01")
         agent("p", "implementer", "WP-02", "WP-02")
         agent("p", "implementer", "WP-01 (fix)", "WP-01", resume=True)
-        self.assertEqual(self.launched[2], ("WP-01", {"resume": "s-1", "model": None, "schema_name": None}))
+        self.assertEqual(self.launched[2],
+                         ("WP-01", {"resume": "s-1", "spent": 0.0, "model": None, "schema_name": None}))
 
     def test_without_a_session_or_with_a_model_the_call_is_fresh(self):
         agent = launch.resuming(self.launch, {"WP-01"})

@@ -153,6 +153,36 @@ NOTES = {
         "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
         "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
     ],
+    "2.20.0": [
+        "The native workflow records its token usage: /implement runs `save-result --run <runId>`, which reads "
+        "Claude Code's own record of the run and its agents' transcripts and adds tokens, turns and model per agent "
+        "to the saved result (usage.by_agent; no dollars). If those files are not there, the result is saved without "
+        "it and the command says why.",
+        "Inside a Claude Code session the plan no longer prints the common rules: Claude Code already gives "
+        ".claude/rules/agentic/common.md to every agent as project instructions, and the prompt names it in one "
+        "line. The language rules are still printed, and the fallback mode prints them all.",
+    ],
+    "2.19.0": [
+        "After a fix cycle QA no longer repeats its whole pass: it re-checks the packages fixed, against their diffs "
+        "and the defects of its last report (in the fallback engine it continues its session). When the fix only "
+        "closed findings of the standards reviewer, QA is not launched again and its report stands. The result's "
+        "qa_passes says how each pass ran: full, scoped or kept.",
+        "The printed rules reach only the agents that use them: the test-auditor, the doc-updater and the Spec "
+        "reviewer no longer receive them. The doc-updater leaves the link check to docs-check.",
+    ],
+    "2.18.1": [
+        "The hook's git rules: a backslash line continuation no longer hides --no-verify or commit -n, "
+        "--config-env=core.hooksPath is refused, `git log --grep commit -n 5` and `git commit -uno` are no longer "
+        "mistaken for a hook bypass, and a long command is judged in one pass instead of seconds.",
+        "The fallback engine's cost report no longer counts a fix attempt twice: a resumed session reported its "
+        "whole cost again. run-pipeline without --resume forgets the waves of the run before, so a later --resume "
+        "cannot skip one.",
+        "No more tracebacks: validate on a manifest field of the wrong type, verify on a command that cannot "
+        "start, docs-check on a linked file that is not UTF-8, save-result on a result that is not an object (its "
+        "file is kept). A verify command that ignores the timeout's request to end is killed.",
+        "On Windows, AGENTIC_CLAUDE and the manifest's commands keep their backslashes (C:\\Tools\\claude.exe, "
+        ".\\gradlew.bat).",
+    ],
     "2.18.0": [
         "The guardrail hook loads only the guard: it no longer imports the launcher, the installer or the network "
         "modules on every tool call (100 to 58 ms per call where it was measured), and a test pins that import "

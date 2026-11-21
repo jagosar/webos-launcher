@@ -30,9 +30,9 @@ You make sure the documentation tells the truth about the code that has just bee
 3. Read the code map (`docs.codemap`, if it exists) to place the modules.
 4. Update, only where it applies:
    - **README:** installation, usage, commands and configuration that changed.
-   - **CHANGELOG:** an entry under `## [Unreleased]` in Keep a Changelog format (Added, Changed, Fixed, Removed). Create it if it is in your zone and does not exist.
+   - **CHANGELOG:** an entry under `## [Unreleased]` in Keep a Changelog format (Added, Changed, Fixed, Removed). Write it only if it is in your zone (create it if missing); if it is not, say nothing about it.
    - **Guides in `docs/`** affected by the change.
-5. Re-read every file you touched and check that all its relative links and paths exist. After the agent, `agentic.py docs-check` will check them too.
+5. Do not check links or paths: `agentic.py docs-check` does it right after you.
 
 # Report (your final answer, under 200 words)
 

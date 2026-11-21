@@ -170,6 +170,7 @@ def summarize(result, state):
             "review_axes": review_axes(result.get("review")), "rules": result.get("rules"),
             "verification_failures": len(result.get("verification_failures") or []),
             "agent_calls": result.get("agent_calls"), "models": sorted(models), "re_review": re_review_counts(result),
+            "qa_passes": [p["mode"] for p in result.get("qa_passes") or []],
             "environment_retries": [{"cmd": r["cmd"], "exit_code": r["exit_code"]}
                                     for r in result.get("environment_retries") or []],
             "untested": [{"wp": p["wp"], "claim": p["claim"], "fact": p["fact"]} for p in result.get("pending", [])
@@ -219,7 +220,7 @@ class ConformanceTests(unittest.TestCase):
                 mine, theirs = run_scenario(decl), self.workflow[decl["name"]]
                 keys = ("result", "failed_stage", "detail", "fix_cycles", "pending", "gates", "gate_calls", "agents",
                         "not_checked", "gate_denials", "review_callers", "verification_failures", "review_axes", "rules",
-                        "agent_calls", "models", "re_review")
+                        "agent_calls", "models", "re_review", "qa_passes")
                 for key in keys:
                     self.assertEqual(mine[key], theirs[key], key)
                 self.assertEqual(mine["prompts"], theirs["prompts"], "the agents must receive the same prompts")
@@ -459,21 +460,22 @@ class ReviewAxesTests(unittest.TestCase):
     def test_printed_rules_reach_the_writers_and_judges_only(self):
         printed = by_name("printed rules reach the agents")
         self.assertEqual(printed["rules"], "printed")
-        for agent in ("implementer", "reviewer", "standards-reviewer"):
+        for agent in ("implementer", "test-author", "standards-reviewer", "qa"):
             self.assertTrue(all("RULE-TEXT" in p for p in prompts_of(printed, agent)), agent)
-        for agent in ("gatekeeper", "verifier"):
+        for agent in ("test-auditor", "reviewer", "doc-updater"):
+            self.assertTrue(prompts_of(printed, agent), agent)
+        for agent in ("gatekeeper", "verifier", "test-auditor", "reviewer", "doc-updater"):
             self.assertFalse([p for p in prompts_of(printed, agent) if "RULE-TEXT" in p or "Rules you must" in p])
         damaged = by_name("rules text that arrives damaged falls back to the paths")
         self.assertEqual(damaged["rules"], "pointed")
-        for agent in ("implementer", "reviewer", "standards-reviewer"):
+        for agent in ("implementer", "standards-reviewer"):
             for p in prompts_of(damaged, agent):
                 self.assertIn("Rules you must follow (language and common): .claude/rules/agentic/common.md", p)
                 self.assertNotIn("RULE-TEXT", p)
         bare = by_name("the implementer can be left without the rules")
         self.assertTrue(prompts_of(bare, "implementer"))
         self.assertFalse([p for p in prompts_of(bare, "implementer") if "RULE-TEXT" in p])
-        for agent in ("reviewer", "standards-reviewer"):
-            self.assertTrue(all("RULE-TEXT" in p for p in prompts_of(bare, agent)), agent)
+        self.assertTrue(all("RULE-TEXT" in p for p in prompts_of(bare, "standards-reviewer")))
 
     def test_the_review_after_a_fix_is_scoped_and_never_verified(self):
         s = by_name("a fix is re-reviewed on its open findings only")

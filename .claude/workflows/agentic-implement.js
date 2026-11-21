@@ -270,7 +270,7 @@ const unchangedClaims = (report, out, id) => {
     ? report.files.filter(f => !seen.some(s => f === s || f.endsWith('/' + s)))
     : []
 }
-const run = { result: 'REVIEW', stages: [], baseline: null, work_packages: {}, verification: null, review: null, qa: null, test_audit: null, docs: null, fix_cycles: 0, pending: [], not_checked: [], gate_denials: {}, verification_failures: [], agent_calls: 0, environment_retries: [] }
+const run = { result: 'REVIEW', stages: [], baseline: null, work_packages: {}, verification: null, review: null, qa: null, test_audit: null, docs: null, fix_cycles: 0, pending: [], not_checked: [], gate_denials: {}, verification_failures: [], agent_calls: 0, environment_retries: [], qa_passes: [] }
 // Keeps each report's not_checked per call; passes `model` only when set (escalation); counts every call, failed too.
 const report = async (prompt, opts) => {
   const { model, ...rest } = opts
@@ -323,6 +323,8 @@ const AXES = ['spec', 'standards']
 let reviewed = false
 let fixedSinceReview = new Set()
 let fixCountAtReview = {}
+// QA after its first pass re-checks the packages fixed since, unless only Standards findings were fixed.
+let fixedSinceQa = new Set(), fixCountAtQa = {}, sourcesSinceQa = new Set()
 let lastConfirmed = { spec: [], standards: [] }
 // A package's own key: plan.wave_of comes from JSON, so a name like "constructor" must not read as a package.
 const isWp = wp => Object.prototype.hasOwnProperty.call(plan.wave_of, wp)
@@ -367,7 +369,7 @@ async function documentStage(steps) {
     run.pending.push({ type: 'documentation', severity: 'medium', problem: 'the documentation stage could not be opened' })
     return
   }
-  const doc = await report('Update the documentation according to architecture.md and the integrated code.' + RULES, { agentType: 'doc-updater', label: 'doc-updater', schema: DOCS_SCHEMA })
+  const doc = await report('Update the documentation according to architecture.md and the integrated code.', { agentType: 'doc-updater', label: 'doc-updater', schema: DOCS_SCHEMA })
   const fin = await seq([`close-stage docs DOCS=${doc && doc.status === 'DONE' ? 'done' : 'blocker'}`, 'docs-check'], 'close-stage docs')
   const close = step(fin, 0)
   const check = step(fin, 1)
@@ -496,7 +498,8 @@ async function fixCycle(defects, opened) {
   for (const w of waves) byWave[w] = Object.keys(by).filter(wp => plan.wave_of[wp] === w).sort()
   const out = await runWaves(waves, byWave, by, opened)
   for (const wp of Object.keys(by)) fixCount[wp] = (fixCount[wp] || 0) + 1
-  for (const wp of Object.keys(by)) fixedSinceReview.add(wp)
+  for (const wp of Object.keys(by)) { fixedSinceReview.add(wp); fixedSinceQa.add(wp) }
+  for (const d of defects) sourcesSinceQa.add(d.source)
   return out
 }
 
@@ -564,7 +567,7 @@ const fullReview = async post => {
     ? `\nCallers, outside the diff, of the public symbols this change defines or modifies (the reviewer must read them), as JSON:\n${JSON.stringify(callerItems)}\nA change that breaks one of them is a finding on the package that owns the changed symbol, even though the caller's file was not touched.${foundCallers.truncated ? ' The list is truncated.' : ''}`
     : ''
   const [specR, stdR] = await parallel([
-    () => report('Review the integrated code according to architecture.md.' + callers + concerns + RULES, { agentType: 'reviewer', label: 'reviewer', schema: REVIEW_SCHEMA }),
+    () => report('Review the integrated code according to architecture.md.' + callers + concerns, { agentType: 'reviewer', label: 'reviewer', schema: REVIEW_SCHEMA }),
     () => report('Review the integrated code against section 7 of architecture.md and the rules below. Report only breaches of a written rule: name it in "rule".' + RULES, { agentType: 'standards-reviewer', label: 'standards-reviewer', schema: STANDARDS_SCHEMA }),
   ])
   if (!specR) return { stopped: stop('review', 'the reviewer returned no report') }
@@ -611,13 +614,7 @@ const reReviewStage = async post => {
   const scope = fixedSinceReview
   const open = {}
   for (const axis of AXES) open[axis] = lastConfirmed[axis].filter(f => scope.has(f.wp))
-  const diffs = [...scope].sort().flatMap(wp => {
-    const out = []
-    for (let n = (fixCountAtReview[wp] || 0) + 1; n <= (fixCount[wp] || 0); n += 1) {
-      out.push(`.claude/state/runs/${wp}.fix-${n}.diff`)
-    }
-    return out
-  }).join(', ')
+  const diffs = fixDiffs([...scope].sort(), fixCountAtReview)
   const asked = AXES.filter(axis => open[axis].length)
   const answers = await parallel(asked.map(axis => () => report(
     `Re-review the fix, on the ${AXIS_NAMES[axis]} axis only. ` +
@@ -625,7 +622,7 @@ const reReviewStage = async post => {
     `${JSON.stringify(open[axis])}\n` +
     `The fix's diffs are ${diffs}: read them and the code they changed. ` +
     'For each fingerprint say ADDRESSED or NOT_ADDRESSED, with the line that shows it. ' +
-    'Report anything new in new_findings: it is recorded and does not block this run.' + RULES,
+    'Report anything new in new_findings: it is recorded and does not block this run.' + (axis === 'standards' ? RULES : ''),
     { agentType: REVIEW_SOURCES[axis], label: `${REVIEW_SOURCES[axis]} (re-review)`, schema: RE_REVIEW_SCHEMA })))
   const reports = {}
   asked.forEach((axis, i) => { reports[axis] = answers[i] })
@@ -667,6 +664,42 @@ const closeReview = async byAxis => {
   }
   return { confirmed }
 }
+// The diffs of every fix of these packages since the count in `countAt`.
+const fixDiffs = (wps, countAt) => wps.flatMap(wp => {
+  const out = []
+  for (let n = (countAt[wp] || 0) + 1; n <= (fixCount[wp] || 0); n += 1) {
+    out.push(`.claude/state/runs/${wp}.fix-${n}.diff`)
+  }
+  return out
+}).join(', ')
+// QA's pass: whole the first time. After fixes, a re-check of the packages fixed since its last pass; or no call at
+// all, its report standing, when every defect fixed since came from the standards reviewer. Null when QA gave none.
+const qaStage = async () => {
+  phase('QA')
+  const onlyStandards = sourcesSinceQa.size === 1 && sourcesSinceQa.has('standards-reviewer')
+  const mode = !run.qa || sourcesSinceQa.size === 0 ? 'full' : onlyStandards ? 'kept' : 'scoped'
+  const scope = [...fixedSinceQa].sort()
+  const prompt = mode === 'full' ? 'Run the system\'s QA validation according to architecture.md.'
+    : 'Re-check the system after a fix, according to architecture.md. ' +
+      `Packages fixed since your last pass: ${scope.join(', ')}. ` +
+      `The fixes' diffs are ${fixDiffs(scope, fixCountAtQa)}: read them and the code they changed. ` +
+      `Your last report listed these defects, as JSON:\n${JSON.stringify(run.qa.defects)}\n` +
+      'Run the tests in your zone and the full suite again, and add tests only for what the diffs changed. ' +
+      'Report every defect that is still open, from that list or new, with the same fields; ' +
+      'leave out the ones the fix closed. Do not repeat the rest of your first pass.'
+  if (mode !== 'kept') {
+    const label = mode === 'full' ? 'qa' : 'qa (re-check)'
+    const qa = await report(prompt + RULES, { agentType: 'qa', label, schema: QA_SCHEMA })
+    if (!qa) return null
+    run.qa = qa
+    fixedSinceQa = new Set()
+    fixCountAtQa = { ...fixCount }
+    sourcesSinceQa = new Set()
+  }
+  run.qa_passes.push({ mode, status: run.qa.status, defects: run.qa.defects.length })
+  return run.qa
+}
+
 const reviewStage = post => (reviewed ? reReviewStage(post) : fullReview(post))
 // The rest of the run, from briefs on.
 const runAfterPlan = async () => {
@@ -703,7 +736,7 @@ if (startWave === null && plan.acceptance) {
       }
       if (!at || at.status !== 'DONE') return stop('wave 0', 'the test-author returned no usable report', { test_author: at })
       // Red is not enough: a test can fail only because the code does not exist yet and still pass an empty stub.
-      const audit = await report(`Audit the acceptance tests against the brief they were written from, ${brief('AT')}. The test-author reports this coverage, as JSON:\n${JSON.stringify(at.coverage)}` + RULES,
+      const audit = await report(`Audit the acceptance tests against the brief they were written from, ${brief('AT')}. The test-author reports this coverage, as JSON:\n${JSON.stringify(at.coverage)}`,
         { agentType: 'test-auditor', label: round ? 'test-auditor (revision)' : 'test-auditor', schema: AUDIT_SCHEMA })
       if (!audit) return stop('wave 0', 'the test-auditor returned no report')
       const weak = audit.findings.filter(f => blocks(f))
@@ -757,10 +790,8 @@ while (true) {
   if (reviewed.stopped) return reviewed.stopped
   const confirmed = reviewed.confirmed
 
-  phase('QA')
-  const qa = await report('Run the system\'s QA validation according to architecture.md.' + RULES, { agentType: 'qa', label: 'qa', schema: QA_SCHEMA })
+  const qa = await qaStage()
   if (!qa) return stop('qa', 'QA returned no report')
-  run.qa = qa
 
   const implDefects = [
     ...confirmed.map(f => ({ source: REVIEW_SOURCES[f.axis], ...f })),

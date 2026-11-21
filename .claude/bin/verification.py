@@ -4,7 +4,6 @@ failure attribution, and the clean-code ratchet (quality.py) as a command and as
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -46,17 +45,18 @@ def run_command(cmd, timeout=900, scan=None):
     last 200 lines are appended to it, for attributing a failure to the packages that own what it mentions."""
     try:
         # Its own process group: on timeout the whole tree is ended (`npm test` would otherwise leave `vitest` running).
-        proc = subprocess.Popen(compat.resolve(shlex.split(cmd)), cwd=ROOT, stdout=subprocess.PIPE,
+        proc = subprocess.Popen(compat.resolve(compat.split(cmd)), cwd=ROOT, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE,
                                 stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
                                 env=child_env(load_config(), CLAUDE_PROJECT_DIR=str(ROOT)), **compat.group_kwargs())
     except FileNotFoundError:
         return 127, [f"command not found: {cmd}"]
+    except (OSError, ValueError) as e:  # not executable, or quotes that do not close
+        return 126, [f"the command cannot be run: {cmd} ({e})"]
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        compat.kill_tree(proc.pid)
-        proc.communicate()
+        compat.end(proc)
         return 124, [f"the command exceeded {max(timeout // 60, 1)} minute(s)"]
     lines = (out + err).strip().splitlines()
     if scan is not None:

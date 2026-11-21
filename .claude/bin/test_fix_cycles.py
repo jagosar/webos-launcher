@@ -182,7 +182,8 @@ class EscalationTests(unittest.TestCase):
         self.assertIsNotNone(self.opt(fixes[0], "--resume"))
         self.assertIsNone(self.opt(fixes[1], "--resume"), "retried once, fresh")
         self.assertEqual((result["result"], result["fix_cycles"]), ("OK", 1), r.stdout)
-        self.assertEqual(result["agent_calls"], len(calls) - 1, "the retry is the same attempt")
+        # Two resumed calls answer nothing and run again fresh: the fix attempt and QA's re-check after it.
+        self.assertEqual(result["agent_calls"], len(calls) - 2, "a retry is the same attempt")
 
 
 class BudgetTests(unittest.TestCase):

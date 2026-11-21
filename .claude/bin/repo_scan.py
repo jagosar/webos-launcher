@@ -2,6 +2,7 @@
 symbols a change touched (for the reviewer) and the links and paths the documentation cites.
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -9,7 +10,6 @@ import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import compat  # noqa: E402  - the operating-system layer, next to this file
 from core import (  # noqa: E402
     ARCHIVE_DIR, DEFAULT_CODEMAP, ManifestError, ROOT, RULES_DIR, RULES_LIBRARY, SKIP_DIRS, codemap_path, die,
     docs_entity, ledger_stage, load_manifest, owns, source_files, symbol_re
@@ -76,12 +76,33 @@ def render_rules(paths, root):
         parts.append(f"\n--- {rel} ---\n{text.strip()}\n")
     return "".join(parts)
 
-def rules_text(manifest):
-    return render_rules(rule_files(manifest), ROOT)
+POINTED_COMMON = ("\nThe common rules are already in your context, as project instructions ({paths}): follow them. "
+                  "Read those files only if you cannot see them there.\n")
 
-def rules_hint(manifest):
+def always_loaded(path):
+    """Whether Claude Code loads this rules file for every agent: it has no frontmatter, or its frontmatter has no
+    `paths:` key. False when the file cannot be read."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return False
+    end = text.find("\n---", 3) if text.startswith("---") else -1
+    return end == -1 or not re.search(r"^paths\s*:", text[:end], re.M)
+
+def injected_by_claude_code():
+    """Whether this process runs inside a Claude Code session that loads project instructions: CLAUDECODE is set
+    and CLAUDE_CODE_DISABLE_CLAUDE_MDS is not."""
+    return bool(os.environ.get("CLAUDECODE")) and not os.environ.get("CLAUDE_CODE_DISABLE_CLAUDE_MDS")
+
+def rules_text(manifest, native=False):
+    """The rules printed in a prompt. native: the plan of a workflow inside Claude Code, whose agents already
+    receive the files without a `paths` filter as project instructions (design 0027); those are named in one line
+    instead of printed, and the rest is printed as usual."""
     files = rule_files(manifest)
-    return f" Rules you must follow (language and common): {', '.join(files)}." if files else ""
+    loaded = [f for f in files if always_loaded(ROOT / f)] if native else []
+    if not loaded:
+        return render_rules(files, ROOT)
+    return POINTED_COMMON.format(paths=", ".join(loaded)) + render_rules([f for f in files if f not in loaded], ROOT)
 
 def wanted_rules():
     """The rule names rules_sync installs: "common" plus each declared or detected language with a file in the
@@ -179,7 +200,7 @@ def changed_code_files():
     found = set()
     for rel in modified + untracked:
         rel = rel.replace("\\", "/")
-        if set(rel.split("/")[:-1]) & SKIP_DIRS or rel.startswith(".claude/state/") or symbol_re(rel) is None:
+        if set(rel.split("/")[:-1]) & SKIP_DIRS or symbol_re(rel) is None:
             continue
         if (ROOT / rel).is_file():
             found.add(rel)
@@ -219,7 +240,7 @@ def find_callers(changed, symbols):
     per_name = {n: re.compile(CALLER_RE_TEMPLATE % re.escape(n)) for n in names}
     hits = {n: [] for n in names}
     for rel in source_files():
-        if rel in changed_set or symbol_re(rel) is None or rel.startswith(".claude/state/"):
+        if rel in changed_set or symbol_re(rel) is None:
             continue
         try:
             text = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
@@ -306,7 +327,7 @@ def docs_check(manifest):
                 if not target.exists():
                     broken.append({"file": rel, "line": n, "target": link, "kind": "link"})
                 elif (frag and target.suffix == ".md"
-                      and frag not in heading_anchors(target.read_text(encoding="utf-8"))):
+                      and frag not in heading_anchors(target.read_text(encoding="utf-8", errors="replace"))):
                     broken.append({"file": rel, "line": n, "target": link, "kind": "anchor"})
             for cited in PATH_RE.findall(line):
                 first = cited.split("/", 1)[0]

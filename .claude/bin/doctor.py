@@ -10,13 +10,12 @@ from pathlib import Path
 
 import compat
 from core import LEDGER_JSON, QUALITY_BASELINE, ROOT, RULES_DIR, RULES_LIBRARY, STATE, is_flow_repo
-from guardrail import git_bash_state, hooks_static_problem
+from guardrail import GIT_BASH_VAR, git_bash_state, hooks_static_problem
 from installer import INSTALL_RECORD, RETIRED_PERMISSIONS, flow_version
 from repo_scan import wanted_rules
 
 SETTINGS = ROOT / ".claude" / "settings.json"
 SETTINGS_LOCAL = ROOT / ".claude" / "settings.local.json"  # per machine; module level so tests can point it elsewhere
-GIT_BASH_VAR = "CLAUDE_CODE_GIT_BASH_PATH"
 GUARD_DIR = STATE / "guard"
 UPGRADE_DIR = STATE / "upgrade"
 INIT = "/agentic-flow:init"

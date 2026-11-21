@@ -20,7 +20,7 @@ You review the integrated code on the **Spec axis**: does it do what the plan sa
 # Process
 
 0. First action, always: `python3 .claude/bin/agentic.py claim REVIEW`.
-1. Read `architecture.md`, especially sections 6, 10 and 11. The rules printed in your prompt (if it names files instead, read them) tell you what the code should look like; a breach of them alone belongs to the Standards axis.
+1. Read `architecture.md`, especially sections 6, 10 and 11. A breach of a coding rule alone belongs to the Standards axis, which receives the rules; you do not.
 2. Review the integrated diff (`git diff`, `git status`), each WP's files, and **the callers your prompt lists**: the lines outside the diff that use a changed public symbol. Read each one and check that the change keeps it working.
 3. Go through the list below, from critical to low.
 

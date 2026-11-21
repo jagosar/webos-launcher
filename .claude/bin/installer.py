@@ -16,27 +16,9 @@ from core import (  # noqa: E402
 from verification import install_quality_baseline  # noqa: E402
 
 # What `install` puts in another repo: the flow, without the flow's own tests.
-INSTALL_GLOBS = [
-    ".claude/bin/agentic.py",
-    ".claude/bin/core.py",
-    ".claude/bin/manifest_check.py",
-    ".claude/bin/repo_scan.py",
-    ".claude/bin/verification.py",
-    ".claude/bin/stage.py",
-    ".claude/bin/installer.py",
-    ".claude/bin/launch.py",
-    ".claude/bin/guardrail.py",
-    ".claude/bin/hook.py",
-    ".claude/bin/quality.py",
-    ".claude/bin/compat.py",
-    ".claude/bin/waiting.py",
-    ".claude/bin/pipeline.py",
-    ".claude/bin/brief.py",
-    ".claude/bin/upgrade.py",
-    ".claude/bin/doctor.py",
-    ".claude/bin/plan_picture.py",
-    ".claude/bin/findings.py",
-    ".claude/bin/reports.py",
+INSTALL_BIN = ("agentic core manifest_check repo_scan verification stage installer launch guardrail hook "
+               "quality compat waiting pipeline brief upgrade doctor plan_picture findings reports workflow_usage")
+INSTALL_GLOBS = [f".claude/bin/{name}.py" for name in INSTALL_BIN.split()] + [
     ".claude/agents/*.md",
     ".claude/commands/*.md",
     ".claude/skills/*/SKILL.md",
@@ -189,8 +171,8 @@ def install_plan(target, upgrade, force):
                      if ".." not in Path(r).parts and not Path(r).is_absolute()
                      and any(fnmatch.fnmatch(r, g) for g in flow_globs)
                      and not (SOURCE_ROOT / r).exists() and (target / r).is_file() and intact(r))
-    return {"record": record, "previous": previous, "history": history, "record_path": record_path,
-            "sources": sources, "plan": plan, "removed": removed, "intact": intact}
+    return {"record": record, "previous": previous, "record_path": record_path,
+            "sources": sources, "plan": plan, "removed": removed}
 
 def install_guard(target, prep, dry_run, allow_dirty):
     """Refuses to write over uncommitted changes or a run in progress; returns the problems found."""

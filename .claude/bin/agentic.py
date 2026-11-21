@@ -22,9 +22,10 @@ Subcommands:
   verify              Build/types/lint/tests phases + green acceptance, compared with the baseline. JSON, with the
                       work packages that own what a failure mentions ("suspects").
   sync-permissions    Adds to .claude/settings.local.json the permissions the agents need.
-  save-result [FILE]
+  save-result [FILE] [--run RUN_ID]
                       Saves the workflow JSON in .claude/state/runs/workflow-result.json (from FILE, which it
-                      deletes, or from stdin). The launcher cannot write in .claude/, a protected path.
+                      deletes, or from stdin). The launcher cannot write in .claude/, a protected path. With --run,
+                      adds the token usage of that workflow run, read from Claude Code's own files when they are there.
   briefs              Writes the slice of architecture.md each WP and the test-author need, in .claude/state/briefs/.
   run-acceptance      Wave 0: launches the test-author agent, which writes the acceptance tests before the code.
   acceptance --expect red|green
@@ -240,22 +241,57 @@ def cmd_baseline(args):
     baseline(require_valid())
 
 
+SAVE_RESULT_USAGE = "Uso: save-result [FILE] [--run RUN_ID]"
+
+
+def _save_result_args(args):
+    """(FILE or None, RUN_ID or None) of save-result's command line: at most one of each, in either order."""
+    rest, run = list(args), None
+    if "--run" in rest:
+        i = rest.index("--run")
+        if i + 1 >= len(rest) or rest[i + 1].startswith("--"):
+            die(SAVE_RESULT_USAGE)
+        run = rest[i + 1]
+        del rest[i:i + 2]
+    if len(rest) > 1 or any(a.startswith("--") for a in rest):
+        die(SAVE_RESULT_USAGE)
+    return (rest[0] if rest else None), run
+
+
+def _usage_note(data, run):
+    """Adds the native run's usage to the result (design 0027) and returns what to say about it. A result that
+    carries its own usage keeps it; a run whose files cannot be read costs nothing but the usage."""
+    if "usage" in data:
+        return " · usage: kept"
+    found, reason = sibling("workflow_usage").usage_for(run)
+    if not found:
+        return f" · usage: not recorded ({reason})"
+    data["usage"] = found
+    missing = f", {found['missing']} without a transcript" if found["missing"] else ""
+    return f" · usage: {len(found['by_agent'])} agent(s){missing}"
+
+
 def cmd_save_result(args):
     # The launcher cannot write in .claude/ (a protected path): this saves the workflow JSON here, read from stdin.
     # With FILE (e.g. .agentic-result.json at the root), it reads and deletes it; without it, it reads stdin.
-    src = (ROOT / args[0]) if args else None
-    if src is not None and (Path(args[0]).as_posix() != RESULT_FILE or not src.is_file()):
+    # With --run, the workflow run's token usage is read from Claude Code's files and saved with it.
+    name, run = _save_result_args(args)
+    src = (ROOT / name) if name else None
+    if src is not None and (Path(name).as_posix() != RESULT_FILE or not src.is_file()):
         die(f"save-result: only {RESULT_FILE}, at the repo root, is read (and then deleted).")
     try:
         data = json.loads(src.read_text(encoding="utf-8")) if src else json.loads(compat.read_stdin_text())
     except json.JSONDecodeError as e:
         die(f"save-result: not valid JSON: {e}")
-    if src:
-        src.unlink()
+    if not isinstance(data, dict):
+        die("save-result: the workflow's result is a JSON object.")
+    note = _usage_note(data, run) if run is not None else ""
     out = STATE / "runs" / "workflow-result.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Saved to {out.relative_to(ROOT)} (result: {data.get('result', '?')})")
+    if src:
+        src.unlink()  # only once it is saved
+    print(f"Saved to {out.relative_to(ROOT)} (result: {data.get('result', '?')}){note}")
 
 
 def cmd_sync_permissions(args):
