@@ -153,6 +153,14 @@ NOTES = {
         "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
         "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
     ],
+    "2.20.1": [
+        "The agents that write code are told the quality limits the verification enforces (line length, file and "
+        "function size, from .claude/quality-baseline.json): one sentence at the end of the rules in the prompts of "
+        "the implementer, the test-author, the standards reviewer and QA. Before, the test-author could not know them.",
+        "A quality failure is attributed by the file it names: a criterion's number in the name of an acceptance test "
+        "no longer sends an implementation package to fix a file it cannot edit. verify lists violations in the "
+        "acceptance tests or in QA's tests in zone_suspects, and /implement says whose files they are.",
+    ],
     "2.20.0": [
         "The native workflow records its token usage: /implement runs `save-result --run <runId>`, which reads "
         "Claude Code's own record of the run and its agents' transcripts and adds tokens, turns and model per agent "

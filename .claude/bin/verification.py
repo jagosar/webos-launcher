@@ -13,7 +13,7 @@ import compat  # noqa: E402  - the operating-system layer, next to this file
 from reports import clear_report, failed_tests, failure_text, report_path  # noqa: E402
 from core import (  # noqa: E402
     BASELINE, ENTRY, QUALITY_BASELINE, ROOT, STATE, VERIFY_PHASES, at_entity, child_env, die, is_flow_repo,
-    ledger_stage, load_config, sibling, source_files, symbol_re, wps
+    ledger_stage, load_config, owns, qa_entity, sibling, source_files, symbol_re, wps
 )
 
 # A phase that already failed at baseline is compared failure by failure: the lines that name a failure, without the
@@ -246,9 +246,10 @@ def run_phases(manifest):
         phases.append(extra)
     return phases
 
-def attribute(manifest, lines):
+def attribute(manifest, lines, by_criteria=True):
     """Maps the output of a failure to the work packages that own what it mentions: a file of theirs (by path) or one
-    of their criteria (AC-NNN in a test name, through the WP's "acs"). Deterministic; no model."""
+    of their criteria (AC-NNN in a test name, through the WP's "acs"). Deterministic; no model. by_criteria=False:
+    only a path counts (the quality phase: a criterion's number in a test's name does not say who wrote the file)."""
     # Absolute paths read as the repo's relative ones, with forward slashes whatever the system printed.
     text = "\n".join(lines).replace("\\", "/").replace(ROOT.as_posix() + "/", "")
     # Whole criteria and whole paths: 0x7f91ac30 is not AC-030, src/a.pyx is not src/a.py, lib/util.py is not util.py.
@@ -260,10 +261,36 @@ def attribute(manifest, lines):
     found = {}
     for wid, wp in sorted(wps(manifest).items()):
         files = [f for f in wp.get("files", []) if mentioned(f)]
-        acs = [a for a in wp.get("acs", []) if f"AC-{int(a[3:]):03d}" in seen]
+        acs = [a for a in wp.get("acs", []) if f"AC-{int(a[3:]):03d}" in seen] if by_criteria else []
         if files or acs:
             found[wid] = {"files": files, "acs": acs}
     return found
+
+QUALITY_FAIL_RE = re.compile(r"^FAIL (?:file|function) (.+?) exceeds ")
+ZONES = (("AT", at_entity), ("QA", qa_entity))  # the zones no work package may edit, and whose files quality measures
+
+def zone_files(manifest, lines):
+    """{"AT": [paths], "QA": [paths]}, without the empty ones: the files of the acceptance zone and of QA's zone that
+    these lines of the quality phase name as over a limit. Sorted, each once."""
+    named = {m.group(1).split("::")[0] for m in map(QUALITY_FAIL_RE.match, lines) if m}
+    found = {}
+    for ident, entity in ZONES:
+        mine = sorted(f for f in named if any(owns(zone, f) for zone in entity(manifest)["files"]))
+        if mine:
+            found[ident] = mine
+    return found
+
+def quality_limits_text():
+    """One sentence for the prompts of whoever writes code: the limits this project's quality baseline enforces
+    (issue 134). "" without a baseline or with an unreadable one: then nothing checks them."""
+    state = quality_state()
+    if state is None or state.get("unreadable"):
+        return ""
+    limits = quality_module().limits_of(state)
+    return ("\nQuality limits, checked on every file you write, tests included: no line over {line_chars} characters; "
+            "no new file over {file_lines} lines; no new function over {function_lines} lines ({test_function_lines} "
+            "in a test) or nested deeper than {nesting}. What is already over a limit has its own allowance in "
+            f"{QUALITY_BASELINE}.\n").format(**limits)
 
 def baseline(manifest):
     """Baseline: the state of the verify phases BEFORE touching anything. Separates regressions from existing failures.
@@ -319,11 +346,14 @@ def verify(manifest):
                  "verdict": verdict, "status": "ok" if acc_ok else "fails", "_scan": scan}
         phases.append(dict(phase, report=state) if state else phase)
     blocking = [p["name"] for p in phases if p.get("status") in ("regression", "fails")]
-    suspects = {}
+    suspects, zone_suspects = {}, {}
     for ph in phases:
         scan = ph.pop("_scan", [])
         if ph.get("status") in ("regression", "fails"):
-            for wid, info in attribute(manifest, scan).items():
+            quality = ph["name"] == "quality"  # its lines name the file at fault: the owner by path, or a zone
+            if quality:
+                zone_suspects = {z: {"phases": ["quality"], "files": f} for z, f in zone_files(manifest, scan).items()}
+            for wid, info in attribute(manifest, scan, by_criteria=not quality).items():
                 entry = suspects.setdefault(wid, {"phases": [], "files": [], "acs": []})
                 entry["phases"].append(ph["name"])
                 entry["files"] = sorted(set(entry["files"]) | set(info["files"]))
@@ -332,5 +362,5 @@ def verify(manifest):
     ok = not blocking
     ledger_stage("verification", "OK" if ok else "REVIEW: " + ", ".join(blocking))
     print(json.dumps({"ok": ok, "blocking": blocking, "preexisting_failures": preexisting, "suspects": suspects,
-                      "phases": phases}, ensure_ascii=False))
+                      "zone_suspects": zone_suspects, "phases": phases}, ensure_ascii=False))
     sys.exit(0 if ok else 3)

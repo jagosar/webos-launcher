@@ -25,6 +25,7 @@ from core import (  # noqa: E402
     usage_records, usage_summary, wps
 )
 from stage import check_stage, snapshot, stage_owners  # noqa: E402
+from verification import quality_limits_text  # noqa: E402
 from repo_scan import injected_by_claude_code, rule_files, rules_text  # noqa: E402
 from findings import blocks, text_sum, waiver_for  # noqa: E402
 
@@ -303,7 +304,7 @@ def render_prompt(manifest, name, ident=None, **values):
     brief = f".claude/state/briefs/{ident}.md" if ident else ""
     spec = load_spec()
     silent = name in IMPLEMENTER_PROMPTS and spec["constants"].get("implementer_rules") is False
-    rules = "" if silent else rules_text(manifest)
+    rules = "" if silent else rules_text(manifest) + quality_limits_text()
     return pipeline_module().render(spec["prompts"][name], wp=ident, brief=brief, rules=rules, **values)
 
 def _report_kind(report, kind, shared):
@@ -662,7 +663,7 @@ def pipeline_plan(manifest):
     """The plan the engines follow, as one JSON line."""
     cfg, constants = checked_config(), load_spec()["constants"]
     waves = sorted({wp["wave"] for wp in wps(manifest).values()})
-    printed = rules_text(manifest, native=injected_by_claude_code())
+    printed = rules_text(manifest, native=injected_by_claude_code()) + quality_limits_text()
     plan = {"waves": waves, "acceptance": bool(at_entity(manifest)["command"]), "type": architecture_type(),
             "verify": sorted(manifest.get("verify", {})), "max_fix_cycles": int(cfg.get("max_fix_cycles", 2)),
             "agents": {wp["id"]: wp.get("agent", "implementer") for wp in wps(manifest).values()},

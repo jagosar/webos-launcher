@@ -51,7 +51,7 @@ Then present it like this:
 - **Status:** `result` (`OK` or `REVIEW`) and, if it failed, `failed_stage` and `detail`.
 - **Acceptance tests (`test_audit`):** whether the test-auditor found weak tests and the test-author had to revise them.
 - **WPs:** a table with WP, status, files and checks, taken from `work_packages`.
-- **Verification:** each phase of `verification.phases`, with acceptance green.
+- **Verification:** each phase of `verification.phases`, with acceptance green. If its `zone_suspects` names `AT` or `QA`, the quality failure is in the acceptance tests or in QA's tests: no package can fix them, so name the files and let the person fix them or relaunch that agent.
 - **Review:** per axis, never merged into one ranking (`review.spec` and `review.standards`):
   - Spec (contracts, correctness, security): confirmed findings, findings refuted by the verifier (and why), and finish notices;
   - Standards (section 7 and the rules): confirmed reflex findings with the rule each breaks, refuted ones, finish notices, and the waived ones with the waiver's reason;
