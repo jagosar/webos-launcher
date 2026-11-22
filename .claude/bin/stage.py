@@ -2,6 +2,7 @@
 content guardrails), open-stage/close-stage, the fix diffs, and the stop gate that refuses a report whose acceptance
 tests fail.
 """
+import contextlib
 import hashlib
 import json
 import os
@@ -11,7 +12,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import compat  # noqa: E402  - the operating-system layer, next to this file
 from core import (  # noqa: E402
     ARCHIVE_DIR, BASELINE, CLAIMS, GATE, GATE_MAX_DENIALS, GATE_MAX_LINES, GATE_STATUSES, GATE_TIMEOUT_S,
     HOOK_SEEN, LEDGER_STATES, ManifestError, PROTECTED_CONFIG_RE, ROOT, SECRET_RES, SKIP_MARKER_RE, STATE,
@@ -224,12 +224,9 @@ def open_stage(manifest, label):
     owners = sorted(o["id"] for o in stage_owners(manifest, label))
     if owners:
         gate_reset(owners)
-        with open(os.devnull, "w", encoding="utf-8") as quiet:  # the snapshot must not pollute the JSON output
-            old, sys.stdout = sys.stdout, quiet
-            try:
-                snapshot(label)
-            finally:
-                sys.stdout = old
+        # the snapshot must not pollute the JSON output
+        with open(os.devnull, "w", encoding="utf-8") as quiet, contextlib.redirect_stdout(quiet):
+            snapshot(label)
     print(json.dumps({"stage": label, "owners": owners}))
     sys.exit(0 if owners else 3)
 

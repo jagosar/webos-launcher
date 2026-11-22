@@ -25,7 +25,8 @@ from core import (  # noqa: E402
     usage_records, usage_summary, wps
 )
 from stage import check_stage, snapshot, stage_owners  # noqa: E402
-from repo_scan import rule_files, rules_hint, rules_text  # noqa: E402
+from verification import quality_limits_text  # noqa: E402
+from repo_scan import injected_by_claude_code, rule_files, rules_text  # noqa: E402
 from findings import blocks, text_sum, waiver_for  # noqa: E402
 
 TYPE_RE = re.compile(r"^(?:Type|Tipo):\s*(feature|change|fix|refactor)\b", re.M | re.I)
@@ -66,8 +67,9 @@ FENCED_JSON_RE = re.compile(r"```json[ \t]*\n(.*?)\n```", re.S)
 # ---------- launchers ----------
 
 def _cli_argv():
-    return shlex.split(os.environ.get("AGENTIC_CLAUDE", "claude"))
+    return compat.split(os.environ.get("AGENTIC_CLAUDE", "claude"))
 
+COST_DECIMALS = 7  # the CLI's own precision; a subtraction of two floats would add noise past it
 INHERITED_SHOWN = 10  # inherited variable names listed when the CLI reports no login
 
 
@@ -188,38 +190,43 @@ def load_spec():
         die(f"{PIPELINE_SPEC.relative_to(ROOT)} does not exist: reinstall the flow (/agentic-flow:init).")
     return json.loads(PIPELINE_SPEC.read_text(encoding="utf-8"))
 
-def usage_of(path):
-    """Token usage and cost of a `claude -p --output-format json` output; zeros/None if there is none."""
+def _output(path):
+    """The JSON object a `claude -p --output-format json` run left in `path`; {} if there is none."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (ValueError, OSError):
-        data = None
-    data = data if isinstance(data, dict) else {}
+        return {}
+    return data if isinstance(data, dict) else {}
+
+def usage_of(path, spent=0.0):
+    """Token usage and cost of a `claude -p --output-format json` output; zeros/None if there is none. `spent`: what
+    the session had cost before this call. The CLI's total is the whole session's, so a resumed call reports it less
+    what came before; the tokens are already this call's alone."""
+    data = _output(path)
     u = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    total = data.get("total_cost_usd")
     return {"input": (u.get("input_tokens") or 0) + (u.get("cache_creation_input_tokens") or 0),
             "cache_read": u.get("cache_read_input_tokens") or 0, "output": u.get("output_tokens") or 0,
-            "cost_usd": data.get("total_cost_usd"), "turns": data.get("num_turns") or 0}
+            "cost_usd": None if total is None else round(max(total - spent, 0), COST_DECIMALS),
+            "turns": data.get("num_turns") or 0}
 
 def session_of(path):
     """The session id a `claude -p --output-format json` output names, or None."""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        return None
-    sid = data.get("session_id") if isinstance(data, dict) else None
+    sid = _output(path).get("session_id")
     return sid if isinstance(sid, str) and sid else None
 
 def run_agent(manifest, cfg, spec, agent_type, ident, label, prompt, out_path, final=False, entity=None,
-              model=None, resume=None, schema_name=None):
+              model=None, resume=None, spent=0.0, schema_name=None):
     """One `claude -p` run with the agent's JSON schema. Returns {"report", "status", "usage", "session_id"} and never
     raises. `final`: also write the end state in the ledger (the one-off commands; the pipeline's close-stage does it
     there). `entity`: the zone the hook judges it by, when it is not `ident` (the standards reviewer runs as REVIEW).
-    `model`: instead of WORKER_MODEL (an escalated fix attempt); `resume`: the session id to continue; `schema_name`:
+    `model`: instead of WORKER_MODEL (an escalated fix attempt); `resume`: the session id to continue, and `spent`
+    what it has cost so far; `schema_name`:
     the schema, when it is not the agent type's (a re-review). The spec's advisor_model, when set, goes as --advisor."""
     schema = spec["schemas"].get(schema_name or agent_type, spec["schemas"]["implementer"])
     advisor = spec["constants"].get("advisor_model")
     # The prompt goes on stdin: on Windows a `claude.cmd` would pass it through cmd.exe, which cuts newlines.
-    cmd = compat.resolve(shlex.split(os.environ.get("AGENTIC_CLAUDE", "claude"))) + [
+    cmd = compat.resolve(_cli_argv()) + [
         "-p", *(["--resume", resume] if resume else []), "--agent", agent_type, "--model", model or WORKER_MODEL,
         *(["--advisor", advisor] if advisor else []), "--output-format", "json",
         "--json-schema", json.dumps(schema, separators=(",", ":")), "--permission-mode", "acceptEdits",
@@ -245,18 +252,18 @@ def run_agent(manifest, cfg, spec, agent_type, ident, label, prompt, out_path, f
                     report = structured_report(out_path, schema)
                     status = report.get("status", "DONE") if report else "NO REPORT"
             except subprocess.TimeoutExpired:
-                compat.kill_tree(proc.pid)
-                proc.wait()
+                compat.end(proc)
                 status = f"TIMEOUT ({cfg['timeout_s']}s)"
     except OSError as e:
         status = f"ERROR ({e})"
-    usage = usage_of(out_path)
+    usage = usage_of(out_path, spent if resume else 0.0)
     with open(USAGE, "a", encoding="utf-8") as f, compat.locked(f):  # agents finish in parallel threads
         f.write(json.dumps({"id": ident or agent_type, "agent": agent_type, "label": label, **usage}) + "\n")
     if final and tracked:
         ledger_update(ident, state=status_to_state(status), pid=None, note=status)
     print(f"{label}: {status}", flush=True)
-    return {"report": report, "status": status, "usage": usage, "session_id": session_of(out_path)}
+    return {"report": report, "status": status, "usage": usage, "session_id": session_of(out_path),
+            "session_cost": (usage["cost_usd"] or 0.0) + (spent if resume else 0.0)}
 
 def write_briefs(manifest):
     """The slice of architecture.md each WP (and the test-author, "AT") needs, in .claude/state/briefs/."""
@@ -297,7 +304,7 @@ def render_prompt(manifest, name, ident=None, **values):
     brief = f".claude/state/briefs/{ident}.md" if ident else ""
     spec = load_spec()
     silent = name in IMPLEMENTER_PROMPTS and spec["constants"].get("implementer_rules") is False
-    rules = "" if silent else rules_text(manifest)
+    rules = "" if silent else rules_text(manifest) + quality_limits_text()
     return pipeline_module().render(spec["prompts"][name], wp=ident, brief=brief, rules=rules, **values)
 
 def _report_kind(report, kind, shared):
@@ -529,10 +536,7 @@ def structured_report(path, schema):
     """The structured answer of a `claude -p --output-format json --json-schema` run, or None. The CLI puts it in
     `structured_output`; older output may carry it as JSON text in `result` (one line, or the last ```json block
     after the agent's prose), so all are accepted."""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        return None
+    data = _output(path)
     report = data.get("structured_output")
     if report is None:
         result = data.get("result")
@@ -554,20 +558,35 @@ def brief_module():
 
 def resuming(launch, packages):
     """The engine's agent callable over launch(prompt, agent_type, label, ident, **run_agent options) -> run_agent's
-    result. It keeps the last session of each package; a call with resume=True continues it, and when the resumed
-    agent gives no report, one fresh agent runs instead: a stale session must not cost the attempt."""
+    result. It keeps the last session of each package and what it has cost; a call with resume=True continues it,
+    and when the resumed agent gives no report, one fresh agent runs instead: a stale session must not cost the
+    attempt."""
     sessions = {}
 
     def agent(prompt, agent_type, label, ident, model=None, resume=False, schema=None):
         opts = {"model": model, "schema_name": schema}
-        res = launch(prompt, agent_type, label, ident, resume=sessions[ident], **opts) \
-            if resume and sessions.get(ident) else None
+        session, spent = sessions.get(ident) or (None, 0.0)
+        res = launch(prompt, agent_type, label, ident, resume=session, spent=spent, **opts) \
+            if resume and session else None
         if not (res and res["report"]):
             res = launch(prompt, agent_type, label, ident, **opts)
         if ident in packages and res["session_id"]:
-            sessions[ident] = res["session_id"]
+            sessions[ident] = (res["session_id"], res.get("session_cost") or 0.0)
         return res["report"]
     return agent
+
+def resume_wave(resume):
+    """The wave a --resume starts at: the one after the last this folder's run finished, or None. A fresh run
+    forgets that record first, or stopping before its first wave would leave the earlier run's waves for a later
+    --resume to skip."""
+    if not resume:
+        PIPELINE_STATE.unlink(missing_ok=True)
+        return None
+    try:
+        done = json.loads(PIPELINE_STATE.read_text(encoding="utf-8")).get("completed_waves", [])
+    except (OSError, ValueError, AttributeError):
+        return None
+    return max(done) + 1 if done else None
 
 def run_pipeline(manifest, args):
     """run-pipeline [--start-wave N] [--resume]: the agentic-implement pipeline with one `claude -p` per agent. The
@@ -579,9 +598,8 @@ def run_pipeline(manifest, args):
         start_wave = int(rest[1])
     elif rest:
         die("Uso: run-pipeline [--start-wave N] [--resume]")
-    if "--resume" in flags and start_wave is None and PIPELINE_STATE.exists():
-        done = json.loads(PIPELINE_STATE.read_text(encoding="utf-8")).get("completed_waves", [])
-        start_wave = max(done) + 1 if done else None
+    resumed = resume_wave("--resume" in flags)
+    start_wave = resumed if start_wave is None else start_wave
     pipeline, spec, cfg = pipeline_module(), load_spec(), load_config()
     require_cli(cfg)
     STATE.mkdir(parents=True, exist_ok=True)
@@ -597,7 +615,7 @@ def run_pipeline(manifest, args):
     gate_env["CLAUDE_PROJECT_DIR"] = str(ROOT)
 
     def gate(cmds, label):
-        ok, results = run_steps([shlex.split(c) for c in cmds], env=gate_env)
+        _, results = run_steps([shlex.split(c) for c in cmds], env=gate_env)
         return {"steps": results}
 
     def launch(prompt, agent_type, label, ident, **opts):
@@ -606,7 +624,7 @@ def run_pipeline(manifest, args):
         if res["status"] == "STOPPED":
             raise pipeline.Halted()
         return res
-    agent = resuming(launch, set(wps(manifest)))
+    agent = resuming(launch, set(wps(manifest)) | {"QA"})  # QA's re-check continues its session too
 
     def wave_done(wave):
         completed.append(wave)
@@ -645,7 +663,7 @@ def pipeline_plan(manifest):
     """The plan the engines follow, as one JSON line."""
     cfg, constants = checked_config(), load_spec()["constants"]
     waves = sorted({wp["wave"] for wp in wps(manifest).values()})
-    printed = rules_text(manifest)
+    printed = rules_text(manifest, native=injected_by_claude_code()) + quality_limits_text()
     plan = {"waves": waves, "acceptance": bool(at_entity(manifest)["command"]), "type": architecture_type(),
             "verify": sorted(manifest.get("verify", {})), "max_fix_cycles": int(cfg.get("max_fix_cycles", 2)),
             "agents": {wp["id"]: wp.get("agent", "implementer") for wp in wps(manifest).values()},

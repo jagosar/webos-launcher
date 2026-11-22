@@ -20,7 +20,7 @@ Arguments: $ARGUMENTS
 4. If section 11 of `architecture.md` blocks any WP, stop.
 5. If the design is not committed, recommend committing it before starting.
 6. Run `python3 .claude/bin/agentic.py sync-permissions`. It adds to `.claude/settings.local.json` the permissions the agents need (tests, verification), so the workflow does not stop to ask.
-7. Run `python3 .claude/bin/agentic.py rules-sync`. It leaves the common rules and the `stack`'s in `.claude/rules/agentic/`, which the agents receive in their prompt.
+7. Run `python3 .claude/bin/agentic.py rules-sync`. It leaves the common rules and the `stack`'s in `.claude/rules/agentic/`. The workflow leaves the common ones to Claude Code, which gives them to every agent, and prints the language ones in the prompt.
 
 # 2. Launch the workflow (the main path)
 
@@ -42,7 +42,7 @@ While it runs:
 
 The workflow returns a JSON. Save it first, because it is the full record of the run, QA report included:
 1. Write it as it is with the Write tool to `.agentic-result.json`, at the repo root.
-2. Run `python3 .claude/bin/agentic.py save-result .agentic-result.json`, which moves it to `.claude/state/runs/workflow-result.json`.
+2. Run `python3 .claude/bin/agentic.py save-result .agentic-result.json --run <runId>`, with the `runId` (`wf_…`) the Workflow tool gave when it launched the workflow; without one, leave `--run` out. It moves the result to `.claude/state/runs/workflow-result.json` and adds each agent's token usage, read from Claude Code's files.
 
 Do not write it directly into `.claude/`, which is a protected path, and do not pass it through a heredoc, because Bash's safety filter blocks it. (In the fallback mode the engine has already saved the same JSON there: read it and skip these two steps.)
 
@@ -51,12 +51,13 @@ Then present it like this:
 - **Status:** `result` (`OK` or `REVIEW`) and, if it failed, `failed_stage` and `detail`.
 - **Acceptance tests (`test_audit`):** whether the test-auditor found weak tests and the test-author had to revise them.
 - **WPs:** a table with WP, status, files and checks, taken from `work_packages`.
-- **Verification:** each phase of `verification.phases`, with acceptance green.
+- **Verification:** each phase of `verification.phases`, with acceptance green. If its `zone_suspects` names `AT` or `QA`, the quality failure is in the acceptance tests or in QA's tests: no package can fix them, so name the files and let the person fix them or relaunch that agent.
 - **Review:** per axis, never merged into one ranking (`review.spec` and `review.standards`):
   - Spec (contracts, correctness, security): confirmed findings, findings refuted by the verifier (and why), and finish notices;
   - Standards (section 7 and the rules): confirmed reflex findings with the rule each breaks, refuted ones, finish notices, and the waived ones with the waiver's reason;
   - whether the rules reached the agents printed or only as paths (`rules`: `printed`, `pointed` or `none`).
-- **QA:** status, plan, defects and coverage gaps.
+- **QA:** status, plan, defects and coverage gaps. `qa_passes` says how each pass ran: `full`, `scoped` (a re-check of what was fixed) or `kept` (a Standards-only fix: the earlier report stands).
+- **Usage (`usage`, if recorded):** tokens by agent type from `usage.by_agent` (new input, cache read, output), and how many agents had no transcript (`missing`).
 - **Fixes:** `fix_cycles` and which WPs were fixed. A failed verification also goes to a fix cycle when `verification.suspects` names the package that owns the failure.
 - **Documentation (`docs`, if there was any):** files the doc-updater updated, whether the code map changed, and the result of `docs-check`.
 - **Pending (`pending`):** each item with its type.

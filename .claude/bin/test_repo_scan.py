@@ -83,5 +83,28 @@ class PowerShellStackTests(unittest.TestCase):
         self.assertIsNone(core.symbol_re("tools/Get-Thing.ps1"), "it would put PowerShell under the brace ratchet")
 
 
+class NativeRulesTests(unittest.TestCase):
+    """Design 0027: the rules Claude Code loads for every agent are those without a `paths` filter."""
+
+    def test_a_file_is_always_loaded_unless_its_frontmatter_filters_by_path(self):
+        cases = {"# Rules\n": True, "---\ndescription: x\n---\n# Rules\n": True,
+                 "---\npaths:\n  - \"**/*.py\"\n---\n# Rules\n": False, "---\npaths : [a]\n---\nx\n": False,
+                 "# Rules\n\npaths: is only a word here\n": True, "--- not closed\npaths: x\n": True}
+        with tempfile.TemporaryDirectory() as d:
+            for i, (text, expected) in enumerate(cases.items()):
+                path = Path(d) / f"r{i}.md"
+                path.write_text(text, encoding="utf-8")
+                self.assertEqual(repo_scan.always_loaded(path), expected, text)
+            self.assertFalse(repo_scan.always_loaded(Path(d) / "missing.md"))
+
+    def test_only_a_session_that_loads_instructions_counts_as_injecting(self):
+        from unittest import mock
+        for env, expected in (({}, False), ({"CLAUDECODE": "1"}, True),
+                              ({"CLAUDECODE": "1", "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1"}, False),
+                              ({"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1"}, False)):
+            with mock.patch.dict("os.environ", env, clear=True):
+                self.assertEqual(repo_scan.injected_by_claude_code(), expected, env)
+
+
 if __name__ == "__main__":
     unittest.main()

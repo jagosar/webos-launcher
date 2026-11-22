@@ -70,6 +70,29 @@ def kill_tree(pid: int) -> None:
         pass
 
 
+def end(proc: subprocess.Popen, grace: float = 5) -> None:
+    """Ends the process and its children and waits for it. A child that ignores the request is killed after
+    `grace` seconds, so a timeout can never wait forever."""
+    kill_tree(proc.pid)
+    try:
+        proc.communicate(timeout=grace)
+    except subprocess.TimeoutExpired:
+        if not IS_WINDOWS:
+            import signal
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        proc.communicate()
+
+
+def split(command: str) -> list[str]:
+    """shlex.split for a command a person wrote. On Windows a backslash is a path separator, not an escape
+    (`C:\\Tools\\claude.exe`, `.\\gradlew.bat`), and Windows takes the forward slash it becomes."""
+    import shlex  # not at the top: every hook call loads this module
+    return shlex.split(command.replace("\\", "/") if IS_WINDOWS else command)
+
+
 def resolve(argv: list[str]) -> list[str]:
     """A copy of argv with the program replaced by its full path when it is on PATH (on Windows, `npm` becomes
     `npm.cmd` through PATHEXT). Unchanged otherwise, so the caller still gets FileNotFoundError."""

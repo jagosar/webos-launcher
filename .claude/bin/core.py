@@ -195,14 +195,9 @@ def die(msg, code=1):
     sys.exit(code)
 
 def load_config():
-    cfg = json.loads(json.dumps(DEFAULT_CONFIG))
+    cfg = dict(DEFAULT_CONFIG)
     if CONFIG.exists():
-        user = json.loads(CONFIG.read_text(encoding="utf-8"))
-        for key, value in user.items():
-            if isinstance(value, dict) and isinstance(cfg.get(key), dict):
-                cfg[key].update(value)
-            else:
-                cfg[key] = value
+        cfg.update(json.loads(CONFIG.read_text(encoding="utf-8")))
     env = os.environ
     if "AGENTIC_TIMEOUT_S" in env:
         cfg["timeout_s"] = int(env["AGENTIC_TIMEOUT_S"])

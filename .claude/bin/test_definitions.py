@@ -289,8 +289,11 @@ class CommandAndWorkflowTests(unittest.TestCase):
 
     def test_workflow_calls_existing_commands(self):
         src = WORKFLOW.read_text(encoding="utf-8")
-        called = set(re.findall(r"gate\(`([\w-]+)", src)) | set(re.findall(r"gate\('([\w-]+)", src))
-        self.assertTrue(called)
+        # Every command goes through seq([...]) or seqRetry([...]); WAVE_TAIL is one such list. The first word of
+        # each element is the command.
+        lists = re.findall(r"\bseq(?:Retry)?\(\[(.*?)\]\s*,\s*[`']", src) + re.findall(r"WAVE_TAIL = \[(.*?)\]", src)
+        called = {name for body in lists for name in re.findall(r"(?:^|[\[,]\s*)[`']([a-z][a-z-]+)", body)}
+        self.assertGreaterEqual(len(called), 8, called)
         self.assertLessEqual(called, agentic_subcommands(), f"the workflow calls: {called - agentic_subcommands()}")
 
     def test_workflow_meta(self):

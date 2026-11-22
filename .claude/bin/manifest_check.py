@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import compat  # noqa: E402  - the operating-system layer, next to this file
 from core import (  # noqa: E402
     ARCHIVE_DIR, FLOW_NAME, ManifestError, RESERVED_IDS, ROOT, RULES_DIR, RULES_LIBRARY, TEMPLATE_MARKER, VERIFY_PHASES,
     WORKER_MODEL, WP_ID_RE, at_entity, die, docs_entity, entities, is_flow_repo, load_manifest, maintainer_mode,
@@ -459,7 +458,10 @@ def require_valid():
         manifest = load_manifest()
     except ManifestError as e:
         die(str(e))
-    errors = validate(manifest)
+    try:
+        errors = validate(manifest)
+    except (TypeError, AttributeError) as e:  # a field of the wrong JSON type, past what the checks name
+        errors = [f"a field has the wrong type ({e})"]
     if errors:
         die("Invalid manifest:\n  " + "\n  ".join(errors))
     return manifest

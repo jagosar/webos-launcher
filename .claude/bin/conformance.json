@@ -1603,6 +1603,226 @@
           "times": 1
         }
       ]
+    },
+    {
+      "name": "QA re-checks only what a fix touched",
+      "plan": {
+        "rules": [
+          ".claude/rules/agentic/common.md"
+        ],
+        "rules_sum": 4823,
+        "rules_text": "\nRules you must follow (common and language). RULE-TEXT"
+      },
+      "qa": [
+        {
+          "status": "FAIL",
+          "plan": [],
+          "defects": [
+            {
+              "id": "D1",
+              "severity": "high",
+              "wp": "WP-02",
+              "kind": "implementation",
+              "section": "6",
+              "repro": "QA-REPRO"
+            }
+          ],
+          "gaps": []
+        },
+        {
+          "status": "PASS",
+          "plan": [],
+          "defects": [],
+          "gaps": []
+        }
+      ]
+    },
+    {
+      "name": "a standards-only fix keeps the QA report",
+      "standards": [
+        {
+          "status": "FAIL",
+          "axis": "standards",
+          "not_checked": [],
+          "findings": [
+            {
+              "wp": "WP-02",
+              "file": "src/b/x.py",
+              "line": 3,
+              "problem": "STANDARDS-PROBLEM",
+              "evidence": "e",
+              "provenance": "read",
+              "tier": "reflex",
+              "rule": "No magic numbers"
+            }
+          ]
+        }
+      ],
+      "qa": [
+        {
+          "status": "PASS",
+          "plan": [],
+          "defects": [
+            {
+              "id": "D2",
+              "severity": "low",
+              "wp": "WP-03",
+              "kind": "implementation",
+              "section": "6",
+              "repro": "LOW"
+            }
+          ],
+          "gaps": []
+        },
+        {
+          "status": "FAIL",
+          "plan": [],
+          "defects": [
+            {
+              "id": "D1",
+              "severity": "high",
+              "wp": "WP-02",
+              "kind": "implementation",
+              "section": "6",
+              "repro": "QA-REPRO"
+            }
+          ],
+          "gaps": []
+        }
+      ]
+    },
+    {
+      "name": "a verification fix is re-checked by QA",
+      "qa": [
+        {
+          "status": "FAIL",
+          "plan": [],
+          "defects": [
+            {
+              "id": "D1",
+              "severity": "high",
+              "wp": "WP-02",
+              "kind": "implementation",
+              "section": "6",
+              "repro": "QA-REPRO"
+            }
+          ],
+          "gaps": []
+        },
+        {
+          "status": "PASS",
+          "plan": [],
+          "defects": [],
+          "gaps": []
+        }
+      ],
+      "verify": [
+        null,
+        {
+          "exit_code": 3,
+          "output": {
+            "ok": false,
+            "blocking": [
+              "tests"
+            ],
+            "preexisting_failures": [],
+            "suspects": {
+              "WP-01": {
+                "phases": [
+                  "tests"
+                ],
+                "files": [
+                  "src/a.py"
+                ],
+                "acs": [
+                  "AC-001"
+                ]
+              }
+            },
+            "phases": [
+              {
+                "name": "tests",
+                "passed": false,
+                "status": "fails",
+                "tail": [
+                  "FAILED src/a.py test_ac_001"
+                ]
+              }
+            ]
+          }
+        },
+        null
+      ]
+    },
+    {
+      "name": "a kept QA report is covered by the next re-check",
+      "standards": [
+        {
+          "status": "FAIL",
+          "axis": "standards",
+          "not_checked": [],
+          "findings": [
+            {
+              "wp": "WP-02",
+              "file": "src/b/x.py",
+              "line": 3,
+              "problem": "STANDARDS-PROBLEM",
+              "evidence": "e",
+              "provenance": "read",
+              "tier": "reflex",
+              "rule": "No magic numbers"
+            }
+          ]
+        }
+      ],
+      "verify": [
+        null,
+        null,
+        {
+          "exit_code": 3,
+          "output": {
+            "ok": false,
+            "blocking": [
+              "tests"
+            ],
+            "preexisting_failures": [],
+            "suspects": {
+              "WP-01": {
+                "phases": [
+                  "tests"
+                ],
+                "files": [
+                  "src/a.py"
+                ],
+                "acs": [
+                  "AC-001"
+                ]
+              }
+            },
+            "phases": [
+              {
+                "name": "tests",
+                "passed": false,
+                "status": "fails",
+                "tail": [
+                  "FAILED src/a.py test_ac_001"
+                ]
+              }
+            ]
+          }
+        },
+        null
+      ],
+      "re_review": {
+        "standards-reviewer": [
+          {
+            "verdict": "NOT_ADDRESSED"
+          },
+          {
+            "verdict": "ADDRESSED"
+          }
+        ]
+      }
     }
   ]
 }
