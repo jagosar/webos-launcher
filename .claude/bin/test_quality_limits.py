@@ -158,8 +158,6 @@ class DefinitionTests(unittest.TestCase):
 @FLOW_REPO_ONLY  # it reads this repository's docs and release files
 class ReleaseTests(unittest.TestCase):
     def test_ac_006_release_2_20_1(self):
-        plugin = json.loads((ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
-        self.assertEqual(plugin["version"], "2.20.1")
         import upgrade
         notes = upgrade.NOTES["2.20.1"]
         self.assertGreaterEqual(len(notes), 2)

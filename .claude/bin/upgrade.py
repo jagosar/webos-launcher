@@ -153,6 +153,16 @@ NOTES = {
         "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
         "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
     ],
+    "2.21.0": [
+        "The stop gate also holds the test-author and QA to the quality limits: when either submits a finished "
+        "report while a file of its own zone is over a limit (line length, file or function size), the hook refuses "
+        "the report with the lines at fault and the agent fixes them in the same call. At most two denials, as for "
+        "a package; after them the report goes through and verification names the zone, as before.",
+    ],
+    "2.20.2": [
+        "`agentic.py status` no longer leaves an empty .claude/state/ledger.json behind, and install no longer "
+        "refuses a project that has one (\"the run state cannot be read\"): an empty ledger means nothing has run.",
+    ],
     "2.20.1": [
         "The agents that write code are told the quality limits the verification enforces (line length, file and "
         "function size, from .claude/quality-baseline.json): one sentence at the end of the rules in the prompts of "
@@ -396,7 +406,8 @@ def guard_problems(target, paths):
     problems = [f"uncommitted: {line[3:].strip()}" for line in status.splitlines() if line.strip()]
     ledger_path = target / ".claude" / "state" / "ledger.json"
     try:
-        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        text = ledger_path.read_text(encoding="utf-8")
+        ledger = json.loads(text) if text.strip() else {}  # empty: nothing has run (what core.locked_json reads too)
     except FileNotFoundError:
         ledger = {}
     except (OSError, ValueError):  # unreadable or corrupt: it cannot tell whether a run is in progress

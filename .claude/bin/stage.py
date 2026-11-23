@@ -15,12 +15,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from core import (  # noqa: E402
     ARCHIVE_DIR, BASELINE, CLAIMS, GATE, GATE_MAX_DENIALS, GATE_MAX_LINES, GATE_STATUSES, GATE_TIMEOUT_S,
     HOOK_SEEN, LEDGER_STATES, ManifestError, PROTECTED_CONFIG_RE, ROOT, SECRET_RES, SKIP_MARKER_RE, STATE,
-    TEST_PATH_RE, WP_ID_RE, at_entity, codemap_path, die, docs_entity, entities, flow_path_refused, ignored,
+    TEST_PATH_RE, WP_ID_RE, ZONE_GATE_STATUSES, at_entity, codemap_path, die, docs_entity, entities,
+    flow_path_refused, ignored,
     ledger_read, ledger_stage, ledger_update, load_manifest, locked_json, owns, qa_entity,
     review_entity, shortcut_problems, sibling, stage_of, wps
 )
 from reports import clear_report, report_paths  # noqa: E402
-from verification import acceptance_check, attribute, normal_failure, run_command, scan_lines  # noqa: E402
+from verification import (  # noqa: E402
+    acceptance_check, attribute, normal_failure, run_command, scan_lines, zone_quality_lines
+)
 
 # Caches and artefacts that test and build tools generate: they do not count as changes.
 DEFAULT_IGNORE = ["__pycache__/", "*.pyc", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/",
@@ -344,5 +347,25 @@ def gate_check(owner_id, status):
         gate_denials(lambda d: {**d, owner_id: {"denials": d.get(owner_id, {}).get("denials", 0) + 1, "last": shown}})
         return shown
     except (ManifestError, OSError, ValueError) as e:
+        print(f"[agentic guard] gate skipped: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
+
+def zone_gate_check(owner_id, status):
+    """The stop gate for the owner of a zone, the test-author ("AT") or QA: None lets the report through; a list of
+    lines refuses it, because files of its zone are over the quality limits (design 0029). Lets through when the
+    report is not a finished one, the owner used up its denials or the zone is within the limits. It runs the
+    quality code over a baseline a person may have edited, and the hook turns an uncaught error of a zoned agent
+    into a refusal with no count: so it fails open on any error at all."""
+    if not isinstance(status, str) or status not in ZONE_GATE_STATUSES.get(owner_id, ()):
+        return None
+    try:
+        if gate_denials(lambda d: None).get(owner_id, {}).get("denials", 0) >= GATE_MAX_DENIALS:
+            return None
+        shown = zone_quality_lines(load_manifest(), owner_id)[:GATE_MAX_LINES]
+        if not shown:
+            return None
+        gate_denials(lambda d: {**d, owner_id: {"denials": d.get(owner_id, {}).get("denials", 0) + 1, "last": shown}})
+        return shown
+    except Exception as e:  # noqa: BLE001
         print(f"[agentic guard] gate skipped: {type(e).__name__}: {e}", file=sys.stderr)
         return None

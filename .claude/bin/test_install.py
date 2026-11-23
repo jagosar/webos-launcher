@@ -183,6 +183,39 @@ class RefusalTests(InstallCase):
         self.assertEqual(self.install(t).returncode, 0)
 
 
+class StatusThenInstallTests(InstallCase):
+    """A project where somebody only looked (`status`) must still take an upgrade: reading the run state leaves no
+    file behind, and an empty one left by an earlier version does not stop the install."""
+
+    def installed(self):
+        t = self.target({})
+        self.assertEqual(self.install(t).returncode, 0)
+        commit(t, "the flow")
+        return t
+
+    def run_in(self, target, *args):
+        return subprocess.run([sys.executable, str(target / ".claude/bin/agentic.py"), *args], cwd=target,
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              env=dict(self.env, CLAUDE_PROJECT_DIR=str(target)))
+
+    def test_status_leaves_no_run_state_behind_and_install_still_works(self):
+        t = self.installed()
+        r = self.run_in(t, "status")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("(none)", r.stdout)
+        self.assertFalse((t / ".claude/state/ledger.json").exists(), "reading must not create the ledger")
+        again = self.install(t)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+
+    def test_an_empty_ledger_from_an_earlier_version_does_not_stop_the_install(self):
+        t = self.installed()
+        (t / ".claude/state").mkdir(parents=True, exist_ok=True)
+        (t / ".claude/state/ledger.json").write_text("", encoding="utf-8")
+        again = self.install(t)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertNotIn("run state", again.stdout + again.stderr)
+
+
 class ReportTests(InstallCase):
     """From test_acceptance_upgrade ac_007 and ac_009: the version line, the notes and validate afterwards."""
 
