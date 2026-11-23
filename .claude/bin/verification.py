@@ -280,6 +280,18 @@ def zone_files(manifest, lines):
             found[ident] = mine
     return found
 
+def zone_quality_lines(manifest, owner_id):
+    """The quality violations of the files of that owner's zone ("AT" or "QA"): each violation line followed by its
+    detail, as quality_check prints them; [] when the zone is within the limits. Measures only the zone's files.
+    [] without a quality baseline, with an unreadable one, or for any other owner."""
+    entity, state = dict(ZONES).get(owner_id), quality_state()
+    if entity is None or state is None or state.get("unreadable"):
+        return []
+    zone, q = entity(manifest)["files"], quality_module()
+    files = [f for f in quality_files(state) if any(owns(z, f) for z in zone)]
+    result = q.check(state, q.measure(ROOT, files, q.limits_of(state)))
+    return [row for pair in zip(result["violations"], result["details"]) for row in pair]
+
 def quality_limits_text():
     """One sentence for the prompts of whoever writes code: the limits this project's quality baseline enforces
     (issue 134). "" without a baseline or with an unreadable one: then nothing checks them."""

@@ -20,7 +20,7 @@ from core import (  # noqa: E402
     codemap_path, entities, flow_hooks, flow_path_refused, ledger_update, load_manifest, locked_json,
     now_hm, owns, shortcut_problems, stage_of, with_claims, wps
 )
-from stage import gate_check, gate_denials  # noqa: E402
+from stage import gate_check, gate_denials, zone_gate_check  # noqa: E402
 
 # A claim is the whole command, never part of one: `claim WP-01 && git push` must still meet the Bash rules.
 CLAIM_RE = re.compile(r"\s*(?:(?:python3?|sh)\s+)?[\w./-]*agentic(?:\.py)?\s+claim\s+(WP-\d+|QA|AT|REVIEW|DOCS)\s*")
@@ -282,7 +282,8 @@ def resolve_owner(data, tool, tinput, agent_id, owner_id):
     return False, owner_id
 
 def report_gate(owner_id, tinput):
-    """StructuredOutput: the report itself, checked by the stop gate for a finished package."""
+    """StructuredOutput: the report itself, checked by the stop gate: a finished package by its acceptance tests,
+    the test-author and QA by the quality limits of the files of their own zone."""
     # The report itself. A finished package is checked by the stop gate; a report is never refused for a missing claim.
     if owner_id and WP_ID_RE.fullmatch(owner_id):
         failing = gate_check(owner_id, tinput.get("status"))
@@ -293,6 +294,14 @@ def report_gate(owner_id, tinput):
                   f"(denial {denials} of {GATE_MAX_DENIALS}). Failing lines:\n  " + "\n  ".join(failing)
                   + f"\nRun `{cmd}`, fix your files and submit the report again. If a test contradicts "
                   "architecture.md, return BLOCKED and say which.")
+        return
+    over = zone_gate_check(owner_id, tinput.get("status"))
+    if over:
+        denials = gate_denials(lambda d: None).get(owner_id, {}).get("denials", 0)
+        block(f"{owner_id}: the report says {tinput.get('status')} but files of your zone are over the quality limits "
+              f"(denial {denials} of {GATE_MAX_DENIALS}):\n  " + "\n  ".join(over)
+              + "\nBring those files within the limits (shorter lines, smaller functions, a large file split in "
+              "two) without changing what they check, and submit the report again.")
 
 # The Workflow tool's subagents carry the type "workflow-subagent" in every workflow, the flow's or any other (issue
 # 68). 2.11.0 made them claim before writing and blocked workflows unrelated to the flow, so they are free again like

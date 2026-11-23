@@ -135,6 +135,14 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertTrue(problems[0].startswith("the run state cannot be read"), problems)
 
+    def test_an_empty_ledger_is_no_run(self):
+        # What reading the ledger left behind before 2.20.2 (`status` created the file): no agent in it, no run.
+        state = self.repo.dir / ".claude/state"
+        state.mkdir(parents=True)
+        for text in ("", "  \n"):
+            (state / "ledger.json").write_text(text, encoding="utf-8")
+            self.assertEqual(upgrade.guard_problems(self.repo.dir, []), [], repr(text))
+
     def test_a_corrupt_ledger_blocks(self):
         # It cannot tell whether a run is in progress: like an unreadable one, it stops the upgrade.
         state = self.repo.dir / ".claude/state"
