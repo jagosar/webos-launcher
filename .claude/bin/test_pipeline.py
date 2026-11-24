@@ -321,6 +321,16 @@ class EngineTests(unittest.TestCase):
         self.assertIsNone(agentic.structured_report(f, schema))
         self.assertIsNone(agentic.structured_report(tmp / "missing.json", schema))
 
+    def test_a_fix_reads_the_failing_lines_and_the_record_keeps_the_zones(self):
+        by_name = {d["name"]: d for d in CONFORMANCE["scenarios"]}
+        fix = "implementer:WP-02 (fix)#1"
+        regression = run_scenario(by_name["a regression's new failures are the fix's evidence"])["prompts"][fix]
+        self.assertIn("[-] XMM-Panel.ps1 has UTF-8 BOM", regression)
+        self.assertNotIn("Tests Passed: 40", regression)
+        acceptance = run_scenario(by_name["a failing acceptance phase gives its lines to the fix"])["prompts"][fix]
+        self.assertIn("test_ac_002_total", acceptance)
+        zones = run_scenario(by_name["zone gate denials are summed from close-stage"])
+        self.assertEqual(zones["gate_denials"], {"AT": 1, "QA": 2})
 
 
 def raw_run(decl, agent_extra=None):

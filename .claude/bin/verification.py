@@ -33,6 +33,12 @@ COUNT_BEFORE_RE = re.compile(r"(?i)(\b(?:tests|passed|failed|failures|errors|ski
 # nothing about who broke something. A line FAILURE_LINE_RE matches is kept even when this matches too.
 PASS_LINE_RE = re.compile(r"\bPASSED\b|^\s*\[\+\]|[✓✔√]|^\s*--- PASS\b|^ok\s")
 
+# Pester's block headers name a test, not a result: without a report, one is kept only when a failure follows it in
+# its block. A summary ("Tests Passed: 2, Failed: 1") names no test: it keeps no header and closes every block.
+HEADER_LINE_RE = re.compile(r"^\s*(?:Describing|Context)\s+\S")
+PESTER_FAILED_RE = re.compile(r"^\s*\[-\]")
+MAX_FAILING_LINES = 10  # as new_failures
+
 DURATION_RE = re.compile(r"\(?\b\d+(?:\.\d+)?\s?(?:ms|s|sec|secs|seconds)\b\)?|\b0x[0-9a-fA-F]+\b")  # and addresses
 
 MAX_TAIL_LINE = 300  # a failure line can be thousands of characters long; the JSON report keeps it short
@@ -225,8 +231,30 @@ def scan_lines(manifest, key, console):
     tests = failed_tests(ROOT / rel) if rel else None
     if tests is not None:
         return failure_text(tests), "read"
-    kept = [line for line in console if FAILURE_LINE_RE.search(line) or not PASS_LINE_RE.search(line)]
-    return kept, ("unread" if rel else None)
+    return console_lines(console), ("unread" if rel else None)
+
+def console_lines(console):
+    """The console lines read when no report is: every line that is not a passing test's, except a Pester block
+    header, kept only when a failing line follows it inside its block. A `Describing` opens a block and closes the one
+    before; a `Context` opens one inside it. The headers enclosing a failure are kept once, right before it. A summary
+    line (COUNT_BEFORE_RE, unless it is a failing test) keeps no header and closes every block."""
+    kept, open_headers = [], {}  # "Describing" / "Context" -> the header not yet kept
+    for line in console:
+        if HEADER_LINE_RE.match(line):
+            level = line.split()[0]
+            if level == "Describing":
+                open_headers.clear()
+            open_headers[level] = line
+        elif COUNT_BEFORE_RE.search(line) and not PESTER_FAILED_RE.match(line):
+            open_headers.clear()
+            kept.append(line)
+        elif FAILURE_LINE_RE.search(line):
+            kept += [h for h in open_headers.values() if h is not None]
+            open_headers = dict.fromkeys(open_headers)
+            kept.append(line)
+        elif not PASS_LINE_RE.search(line):
+            kept.append(line)
+    return kept
 
 def run_phases(manifest):
     cfg = manifest.get("verify", {})
@@ -362,6 +390,7 @@ def verify(manifest):
     for ph in phases:
         scan = ph.pop("_scan", [])
         if ph.get("status") in ("regression", "fails"):
+            ph["failing_lines"] = failure_lines(scan)[:MAX_FAILING_LINES]
             quality = ph["name"] == "quality"  # its lines name the file at fault: the owner by path, or a zone
             if quality:
                 zone_suspects = {z: {"phases": ["quality"], "files": f} for z, f in zone_files(manifest, scan).items()}

@@ -1823,6 +1823,102 @@
           }
         ]
       }
+    },
+    {
+      "name": "a regression's new failures are the fix's evidence",
+      "verify": [
+        {
+          "exit_code": 3,
+          "output": {
+            "ok": false,
+            "blocking": [
+              "tests"
+            ],
+            "preexisting_failures": [],
+            "suspects": {
+              "WP-02": {
+                "phases": [
+                  "tests"
+                ],
+                "files": [
+                  "src/b/x.py"
+                ],
+                "acs": [
+                  "AC-002"
+                ]
+              }
+            },
+            "phases": [
+              {
+                "name": "tests",
+                "passed": false,
+                "status": "regression",
+                "tail": [
+                  "Tests Passed: 40, Failed: 3"
+                ],
+                "new_failures": [
+                  "[-] XMM-Panel.ps1 has UTF-8 BOM, CRLF only and no non-ASCII"
+                ]
+              }
+            ]
+          }
+        },
+        null
+      ]
+    },
+    {
+      "name": "a failing acceptance phase gives its lines to the fix",
+      "verify": [
+        {
+          "exit_code": 3,
+          "output": {
+            "ok": false,
+            "blocking": [
+              "acceptance"
+            ],
+            "preexisting_failures": [],
+            "suspects": {
+              "WP-02": {
+                "phases": [
+                  "acceptance"
+                ],
+                "files": [
+                  "src/b/x.py"
+                ],
+                "acs": [
+                  "AC-002"
+                ]
+              }
+            },
+            "phases": [
+              {
+                "name": "acceptance",
+                "passed": false,
+                "status": "fails",
+                "failing_lines": [
+                  "FAILED acceptance/test_x.py::test_ac_002_total"
+                ]
+              }
+            ]
+          }
+        },
+        null
+      ]
+    },
+    {
+      "name": "zone gate denials are summed from close-stage",
+      "gate_fail": [
+        {
+          "prefix": "close-stage acceptance ",
+          "exit_code": 0,
+          "output": "ACCEPTANCE (red): red\nGATE: AT=1\nRESULT: OK"
+        },
+        {
+          "prefix": "close-stage qa ",
+          "exit_code": 0,
+          "output": "GATE: QA=2\nRESULT: OK"
+        }
+      ]
     }
   ]
 }

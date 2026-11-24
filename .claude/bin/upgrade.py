@@ -153,6 +153,15 @@ NOTES = {
         "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
         "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
     ],
+    "2.21.1": [
+        "Without a test report, a Pester `Describing` or `Context` header is read only when a failing test follows it "
+        "in its block (a summary line keeps none): a header of passing tests no longer sends its criterion's package "
+        "to a fix cycle or makes the stop gate refuse it.",
+        "`verify` lists `failing_lines` on every phase that blocks, the acceptance phase included, and a fix receives "
+        "a regression's new failures, else those lines, else the end of the output, as its evidence (both engines).",
+        "`close-stage` reports the zone stop gate's denials (`GATE: AT=1`) and the run's `gate_denials` keeps them "
+        "beside the packages', so a saved result shows whether the test-author or QA was held to the limits.",
+    ],
     "2.21.0": [
         "The stop gate also holds the test-author and QA to the quality limits: when either submits a finished "
         "report while a file of its own zone is over a limit (line length, file or function size), the hook refuses "

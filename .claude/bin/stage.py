@@ -265,13 +265,21 @@ def close_stage(manifest, label, items):
         acc_ok, verdict = acceptance_check(manifest, expect, quiet=True)
         print(f"ACCEPTANCE ({expect}): {verdict}")
         ok = ok and acc_ok
-    wp_marks = [jid for jid, _ in marks if WP_ID_RE.fullmatch(jid)]
-    if wp_marks:  # the stop gate's denials, for the engines' run record
-        denials = gate_denials(lambda d: None)
-        print("GATE: " + " ".join(f"{jid}={denials.get(jid, {}).get('denials', 0)}" for jid in wp_marks))
+    gate = gate_line(marks)
+    if gate:  # the stop gate's denials, for the engines' run record
+        print("GATE: " + gate)
     ledger_stage(label, "OK" if ok else "REVIEW")
     print("RESULT:", "OK" if ok else "REVIEW")
     sys.exit(0 if ok else 3)
+
+def gate_line(marks):
+    """The stop gate's denials of the closed stage: every package marked (0 included), then each zone ("AT", "QA")
+    refused at least once. Empty when there is nothing to say."""
+    denials = gate_denials(lambda d: None)
+    count = {jid: denials.get(jid, {}).get("denials", 0) for jid, _ in marks}
+    wp_ids = [jid for jid, _ in marks if WP_ID_RE.fullmatch(jid)]
+    zones = [jid for jid, _ in marks if jid in ("AT", "QA") and count[jid] > 0]
+    return " ".join(f"{jid}={count[jid]}" for jid in wp_ids + zones)
 
 def write_fix_diffs(manifest, label, attempts):
     """What each package changed in this fix attempt, as `runs/<ID>.fix-<N>.diff`: the next attempt reads it to avoid

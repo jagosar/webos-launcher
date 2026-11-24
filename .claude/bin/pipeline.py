@@ -90,10 +90,18 @@ def wave_states(wp_ids, reports):
             for wp, rep in zip(wp_ids, reports)]
 
 
+def failing_lines(phase):
+    """A failing phase's lines for a fix: its new failures, else its failing lines, else the end of its output."""
+    for key in ("new_failures", "failing_lines"):
+        if isinstance(phase.get(key), list) and phase[key]:
+            return phase[key]
+    return phase.get("tail") or []
+
+
 def gate_line(output):
     """The stop gate's denials in a close-stage output ("GATE: WP-01=1 WP-02=0"), per package; {} if absent."""
     m = re.search(r"^GATE: (.*)$", str(output or ""), re.M)
-    return {k: int(v) for k, v in re.findall(r"(WP-\d+)=(\d+)", m.group(1))} if m else {}
+    return {k: int(v) for k, v in re.findall(r"(WP-\d+|AT|QA)=(\d+)", m.group(1))} if m else {}
 
 
 def concern_item(wp, text):
@@ -191,6 +199,17 @@ class Pipeline:
             return None
         return res if res and isinstance(res.get("steps"), list) else None
 
+    def close_seq(self, cmds, label):
+        """seq, adding the stop gate's denials its first step (a close-stage) reports to the run's record."""
+        res = self.seq(cmds, label)
+        self.add_gate_denials((self.step(res, 0) or {}).get("output"))
+        return res
+
+    def add_gate_denials(self, output):
+        for ident, n in gate_line(output).items():
+            if n:
+                self.run["gate_denials"][ident] = self.run["gate_denials"].get(ident, 0) + n
+
     def seq_retry(self, cmds, label):
         """seq, once more when the reply was lost or its last step crashed before agentic.py answered (an exit other
         than 0, 1 and 3 with no JSON line): only for prepare and a lone open-stage, which can be repeated safely."""
@@ -281,7 +300,7 @@ class Pipeline:
         v = v or {}
         suspects = v.get("suspects") or {}
         failing = [p for p in v.get("phases") or [] if p.get("status") in ("regression", "fails")]
-        evidence = "\n".join(f"{p['name']}: " + "\n".join(p.get("tail") or []) for p in failing)[:1500]
+        evidence = "\n".join(f"{p['name']}: " + "\n".join(failing_lines(p)) for p in failing)[:1500]
         out = []
         for wp, info in suspects.items():
             if wp not in self.plan["wave_of"]:
@@ -363,7 +382,7 @@ class Pipeline:
             label = "test-author (revision)" if round_ else "test-author"
             at = self.call("test-author", label, prompt, "AT")
             state = "done" if at and at.get("status") == "DONE" else "blocker"
-            close = self.step(self.seq([f"close-stage acceptance AT={state} --expect red"], "close-stage acceptance"), 0)
+            close = self.step(self.close_seq([f"close-stage acceptance AT={state} --expect red"], "close-stage acceptance"), 0)
             self.run["stages"].append({"stage": "wave 0 (revision)" if round_ else "wave 0", "ok": self.ok(close),
                                        "test_author": at, "check": close["output"]})
             if not self.ok(close):
@@ -472,9 +491,7 @@ class Pipeline:
             good = self.ok(close)
             self.run["stages"].append({"stage": f"wave {wave} (fix)" if fixing else f"wave {wave}", "ok": good,
                                        "check": close["output"]})
-            for wp, n in gate_line(close["output"]).items():
-                if n:
-                    self.run["gate_denials"][wp] = self.run["gate_denials"].get(wp, 0) + n
+            self.add_gate_denials(close["output"])
             if not good:
                 return {"stopped": self.stop(f"fix wave {wave}" if fixing else f"wave {wave}",
                                              "the fix ended with blockers or writes outside ownership" if fixing
@@ -711,7 +728,7 @@ class Pipeline:
                 run["result"] = ("REVIEW" if impl or qa["status"] == "BLOCKER"
                                  or any(blocks(p, self.blocking) for p in run["pending"]) else "OK")
                 docs = run["result"] == "OK" and plan.get("docs")
-                fin = self.seq([close_qa] + ((["codemap"] if plan.get("codemap") else []) + ["open-stage docs"] if docs else []),
+                fin = self.close_seq([close_qa] + ((["codemap"] if plan.get("codemap") else []) + ["open-stage docs"] if docs else []),
                                "close-stage qa")
                 if not self.ok(self.step(fin, 0)):
                     return self.stop("qa", "files changed during the QA stage outside its zone")
@@ -722,7 +739,7 @@ class Pipeline:
                 return run
 
             first_wave = self.waves_of(self.group_by_wp(eligible))[0]
-            fin = self.seq([close_qa, f"open-stage {first_wave}"], "close-stage qa")
+            fin = self.close_seq([close_qa, f"open-stage {first_wave}"], "close-stage qa")
             if not self.ok(self.step(fin, 0)):
                 return self.stop("qa", "files changed during the QA stage outside its zone")
             if not self.ok(self.step(fin, 1)):

@@ -300,8 +300,17 @@ const waveStates = (wpIds, reports) => wpIds.map((wp, i) => `${wp}=${!reports[i]
 const gateLine = out => {
   const m = String(out || '').match(/^GATE: (.*)$/m)
   const found = {}
-  if (m) for (const [, wp, n] of m[1].matchAll(/(WP-\d+)=(\d+)/g)) found[wp] = parseInt(n, 10)
+  if (m) for (const [, wp, n] of m[1].matchAll(/(WP-\d+|AT|QA)=(\d+)/g)) found[wp] = parseInt(n, 10)
   return found
+}
+const addGateDenials = out => {
+  for (const [id, n] of Object.entries(gateLine(out))) if (n) run.gate_denials[id] = (run.gate_denials[id] || 0) + n
+}
+// seq, adding the stop gate's denials its first step (a close-stage) reports to the run's record.
+const closeSeq = async (cmds, label) => {
+  const res = await seq(cmds, label)
+  addGateDenials((step(res, 0) || {}).output)
+  return res
 }
 // What a NEEDS_CONTEXT report asked for, as text, or null when the report is malformed (then it is a blocker).
 const missingContext = rep => {
@@ -344,11 +353,13 @@ const groupByWp = defects => {
 }
 const wavesOf = by => [...new Set(Object.keys(by).map(wp => plan.wave_of[wp]))].sort((a, b) => a - b)
 
+// A failing phase's lines for a fix: its new failures, else its failing lines, else the end of its output.
+const failingLines = p => [p.new_failures, p.failing_lines].find(x => Array.isArray(x) && x.length) || p.tail || []
 // A verification failure becomes defects of the packages that own what it mentions (agentic.py attributes them).
 const verificationDefects = v => {
   const suspects = (v && v.suspects) || {}
   const failing = ((v && v.phases) || []).filter(p => p.status === 'regression' || p.status === 'fails')
-  const evidence = failing.map(p => `${p.name}: ${(p.tail || []).join('\n')}`).join('\n').slice(0, 1500)
+  const evidence = failing.map(p => `${p.name}: ${failingLines(p).join('\n')}`).join('\n').slice(0, 1500)
   return Object.entries(suspects).filter(([wp]) => isWp(wp)).map(([wp, info]) => ({
     source: 'verification', severity: 'high', wp, file: (info.files || [])[0] || '',
     problem: `verification fails (${(info.phases || []).join(', ')})${info.acs && info.acs.length ? ` on ${info.acs.join(', ')}` : ''}`, evidence,
@@ -468,7 +479,7 @@ async function runWaves(waves, byWave, defectsByWp, opened) {
     if (!close) return { stopped: stop(fixing ? `fix wave ${wave}` : `wave ${wave}`, LOST) }
     const good = ok(close)
     run.stages.push({ stage: fixing ? `wave ${wave} (fix)` : `wave ${wave}`, ok: good, check: close && close.output })
-    for (const [wp, n] of Object.entries(gateLine(close.output))) if (n) run.gate_denials[wp] = (run.gate_denials[wp] || 0) + n
+    addGateDenials(close.output)
     if (!good) {
       return { stopped: stop(fixing ? `fix wave ${wave}` : `wave ${wave}`, fixing
         ? 'the fix ended with blockers or writes outside ownership'
@@ -727,7 +738,7 @@ if (startWave === null && plan.acceptance) {
     for (let round = 0; ; round += 1) {
       const at = await report(prompt + RULES, { agentType: 'test-author', label: round ? 'test-author (revision)' : 'test-author', schema: AT_SCHEMA })
       const state = at && at.status === 'DONE' ? 'done' : 'blocker'
-      const close = step(await seq([`close-stage acceptance AT=${state} --expect red`], 'close-stage acceptance'), 0)
+      const close = step(await closeSeq([`close-stage acceptance AT=${state} --expect red`], 'close-stage acceptance'), 0)
       run.stages.push({ stage: round ? 'wave 0 (revision)' : 'wave 0', ok: ok(close), test_author: at, check: close && close.output })
       if (!ok(close)) {
         return stop('wave 0', at && at.status === 'BLOCKER'
@@ -810,7 +821,7 @@ while (true) {
   if (eligible.length === 0) {
     run.result = implDefects.length || qa.status === 'BLOCKER' || run.pending.some(p => blocks(p)) ? 'REVIEW' : 'OK'
     const docs = run.result === 'OK' && plan.docs
-    const fin = await seq([closeQa, ...(docs ? [...(plan.codemap ? ['codemap'] : []), 'open-stage docs'] : [])], 'close-stage qa')
+    const fin = await closeSeq([closeQa, ...(docs ? [...(plan.codemap ? ['codemap'] : []), 'open-stage docs'] : [])], 'close-stage qa')
     if (!ok(step(fin, 0))) return stop('qa', 'files changed during the QA stage outside its zone')
     if (docs) {
       await documentStage(fin.steps.slice(1))
@@ -820,7 +831,7 @@ while (true) {
   }
 
   const firstFixWave = wavesOf(groupByWp(eligible))[0]
-  const fin = await seq([closeQa, `open-stage ${firstFixWave}`], 'close-stage qa')
+  const fin = await closeSeq([closeQa, `open-stage ${firstFixWave}`], 'close-stage qa')
   if (!ok(step(fin, 0))) return stop('qa', 'files changed during the QA stage outside its zone')
   if (!ok(step(fin, 1))) return stop(`fix wave ${firstFixWave}`, 'the stage could not be opened')
   const fixed = await fixCycle(eligible, true)
