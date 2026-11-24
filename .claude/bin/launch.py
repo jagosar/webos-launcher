@@ -674,5 +674,6 @@ def pipeline_plan(manifest):
             "escalation_model": constants.get("escalation_model") if cfg.get("escalation", True) else None,
             "max_agent_calls": cfg.get("max_agent_calls"),
             "wave_of": {wp["id"]: wp["wave"] for wp in wps(manifest).values()},
+            "owners": {wp["id"]: list(wp["files"]) for wp in wps(manifest).values()}, "root": ROOT.as_posix(),
             "work_packages": {str(w): sorted(wp["id"] for wp in stage_owners(manifest, str(w))) for w in waves}}
     print(json.dumps(plan))

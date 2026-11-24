@@ -234,7 +234,7 @@ def open_stage(manifest, label):
     sys.exit(0 if owners else 3)
 
 def close_stage(manifest, label, items):
-    """close-stage L ID=state... [--expect red|green] [--fix]: ownership, states, acceptance and fix cycles."""
+    """close-stage L ID=state[@N]... [--expect red|green] [--fix]: ownership, states, acceptance and fix cycles."""
     expect = None
     if "--expect" in items:
         i = items.index("--expect")
@@ -245,19 +245,26 @@ def close_stage(manifest, label, items):
     fix = "--fix" in items
     items = [x for x in items if x != "--fix"]
     known = entities(manifest)
-    marks = []
+    marks, numbers = [], {}
     for item in items:
         jid, _, state = item.partition("=")
-        if jid not in known or state not in LEDGER_STATES:
-            die(f"close-stage: invalid entry '{item}' (a manifest ID and a state in {', '.join(LEDGER_STATES)})")
+        state, at, n = state.partition("@")
+        number_ok = not at or (fix and n.isascii() and n.isdigit() and int(n) >= 1)
+        if jid not in known or state not in LEDGER_STATES or not number_ok:
+            die(f"close-stage: invalid entry '{item}' (a manifest ID and a state in {', '.join(LEDGER_STATES)},"
+                " and @N with --fix only)")
         marks.append((jid, state))
+        if at:
+            numbers[jid] = int(n)
     ledger = ledger_read()
-    for jid, state in marks:
-        extra = {"fix_count": ledger.get(jid, {}).get("fix_count", 0) + 1} if fix else {}
+    # The engine's attempt number (@N) names the diff it will read; without it, the ledger counts as before.
+    attempts = [(jid, numbers.get(jid) or ledger.get(jid, {}).get("fix_count", 0) + 1) for jid, _ in marks]
+    for (jid, state), (_, n) in zip(marks, attempts):
+        extra = {"fix_count": n} if fix else {}
         ledger_update(jid, state=state, stage=stage_of(jid), pid=None,
                       note=state.upper() + (" (fix)" if fix else ""), **extra)
     if fix:
-        write_fix_diffs(manifest, label, [(jid, ledger.get(jid, {}).get("fix_count", 0) + 1) for jid, _ in marks])
+        write_fix_diffs(manifest, label, attempts)
     # In the judge stages a fail or a blocker is a verdict, already in the ledger: only a write outside the zone stops.
     judged = label in ("review", "qa", "docs")
     ok = check_stage(manifest, label) and (judged or all(state in ("done", "pass") for _, state in marks))
@@ -281,20 +288,23 @@ def gate_line(marks):
     zones = [jid for jid, _ in marks if jid in ("AT", "QA") and count[jid] > 0]
     return " ".join(f"{jid}={count[jid]}" for jid in wp_ids + zones)
 
+NO_DIFF = "(the diff of this attempt could not be recorded)\n"
+
 def write_fix_diffs(manifest, label, attempts):
     """What each package changed in this fix attempt, as `runs/<ID>.fix-<N>.diff`: the next attempt reads it to avoid
     repeating a fix that did not work. attempts: [(ID, N)]."""
     tree_file = STATE / f"tree-{label}.txt"
     after = git_tree()
-    if not tree_file.exists() or not after:
-        return
-    before = tree_file.read_text(encoding="utf-8").strip()
+    before = tree_file.read_text(encoding="utf-8").strip() if tree_file.exists() and after else None
     table = wps(manifest)
     runs = STATE / "runs"
     runs.mkdir(parents=True, exist_ok=True)
     for jid, n in attempts:
         files = table.get(jid, {}).get("files", [])
         if not files:
+            continue
+        if before is None:  # a placeholder, so no file of an earlier run survives under this number
+            (runs / f"{jid}.fix-{n}.diff").write_text(NO_DIFF, encoding="utf-8")
             continue
         r = subprocess.run(["git", "diff", "--no-color", "--no-ext-diff", before, after, "--", *files], cwd=ROOT,
                            capture_output=True, text=True, encoding="utf-8", errors="replace")

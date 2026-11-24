@@ -11,7 +11,7 @@ Subcommands:
                       (the run record, run-pipeline's files or the one-off reports); --all adds medium and low ones.
   pipeline-plan       JSON with waves, WPs, acceptance, type, verify phases and the fix limit (workflow).
   open-stage L        Snapshot of stage L (a wave, acceptance, review, qa, docs) and its owners, as JSON.
-  close-stage L ID=estado... [--expect red|green] [--fix]
+  close-stage L ID=state[@N]... [--expect red|green] [--fix]
                       Ownership + ledger states (+ acceptance) (+ fix count), in one call.
   run-pipeline [--start-wave N] [--resume]
                       The whole pipeline (wave 0, waves, verification, review, QA, fixes, docs) with one `claude -p` per
@@ -216,7 +216,7 @@ def cmd_open_stage(args):
 
 def cmd_close_stage(args):
     if not args:
-        die("Uso: close-stage N|acceptance|review|qa ID=estado... [--expect red|green] [--fix]")
+        die("Usage: close-stage N|acceptance|review|qa ID=state[@N]... [--expect red|green] [--fix]")
     close_stage(require_valid(), stage_label(args[0]), args[1:])
 
 

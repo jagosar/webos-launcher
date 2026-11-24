@@ -45,5 +45,19 @@ Extends the [common rules](common.md). Written for Windows PowerShell 5.1 and Pe
 |---|---|
 | build | (not applicable) |
 | types | (not applicable) |
-| lint | `powershell -NoProfile -NonInteractive -Command "Invoke-ScriptAnalyzer -Path . -Recurse -EnableExit"` |
-| tests | `powershell -NoProfile -NonInteractive -Command "Invoke-Pester -EnableExit -OutputFile test-results.xml -OutputFormat NUnitXml"` |
+| lint | `powershell -NoProfile -NonInteractive -File build/Invoke-Lint.ps1` |
+| tests | `powershell -NoProfile -NonInteractive -File build/Invoke-Tests.ps1` |
+
+Run the tools through a runner script with `-File`, never inline code with `-Command`. A prefix rule such as `Bash(powershell -Command X:*)` lets an agent append any code, so `validate` rejects it, and `sync-permissions` allows a `-Command` line only exactly: an agent that runs a subset of the tests is then asked. With `-File` the program is fixed, and its arguments (a subset of the tests) are safe to allow as a prefix:
+
+```powershell
+# build/Invoke-Tests.ps1, in the project's repo
+param([string[]]$Path = '.')
+Invoke-Pester -Path $Path -EnableExit -OutputFile test-results.xml -OutputFormat NUnitXml
+```
+
+- `verify.tests`: `powershell -NoProfile -NonInteractive -File build/Invoke-Tests.ps1`
+- `allow_bash`: `Bash(powershell -NoProfile -NonInteractive -File build/Invoke-Tests.ps1:*)`, which also covers `... -File build/Invoke-Tests.ps1 -Path tests/Panel.Tests.ps1`.
+- `build/Invoke-Lint.ps1` does the same with `Invoke-ScriptAnalyzer -Path . -Recurse -EnableExit`.
+
+`-Path`, `-EnableExit` and `-OutputFormat NUnitXml` are Pester's legacy parameters, accepted by Pester 3.4 and 5 (not measured by the flow: check them against your version).

@@ -65,6 +65,7 @@ Each item names the `claim` (what would be wrong if the fact holds), the exact m
 
 JSON that follows the schema your launcher gives you:
 - `status`: `PASS` only if there are no critical or high defects; `FAIL`; or `BLOCKER` if you cannot run the validation (the suite will not start, the environment is missing).
+- With `BLOCKER`, `blocker_kind`: `environment` when something outside the code stopped you (a command refused by the permissions, a tool missing, the suite will not start for reasons the code does not cause), or `design` when the plan itself keeps you from validating. With `environment`, list in `not_run` the exact commands you could not run, as you would type them: each becomes an item the person runs.
 - `plan`: the categories applied and discarded, one line each. Tests that reproduce medium or low defects stay red on purpose: say so here.
 - `defects`: each with `id`, `tier`, `severity`, `wp`, `kind` (`implementation`: the code does not meet the contract; `design`: the contract or the AC is wrong or incomplete), `section` of architecture.md breached, and the four parts: `repro` (the concrete case: this input or situation gives this wrong result), the problem it shows, `fix` (the smallest change that works) and `if_skipped` (what happens if nobody fixes it). No concrete case, no defect.
 - `needs_validation`: the list above, or `[]`.
