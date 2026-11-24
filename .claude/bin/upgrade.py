@@ -153,6 +153,17 @@ NOTES = {
         "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
         "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
     ],
+    "2.21.2": [
+        "A fix's diff is named by the attempt number in the run: the engines close a fix wave with `ID=state@N`, "
+        "so an agent never reads a diff an earlier run left, and an attempt whose diff cannot be computed leaves a "
+        "placeholder (issue 140).",
+        "A confirmed finding whose evidence names files of other packages is split into one finding per owning "
+        "package, each with its `scope`, so each part goes to the package that can fix it (issue 141).",
+        "A QA `BLOCKER` with `blocker_kind: environment` becomes pending items of kind `qa not run`, one per command "
+        "in `not_run`, with the run's `detail` saying so; the next QA pass is a full one, never kept (issue 142).",
+        "`validate` rejects a PowerShell prefix rule that runs inline code; `sync-permissions` allows a `-Command` "
+        "verify command only exactly and removes its old prefix rule. Use a runner script with `-File` (issue 118).",
+    ],
     "2.21.1": [
         "Without a test report, a Pester `Describing` or `Context` header is read only when a failing test follows it "
         "in its block (a summary line keeps none): a header of passing tests no longer sends its criterion's package "

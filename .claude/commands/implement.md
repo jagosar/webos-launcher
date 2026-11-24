@@ -48,7 +48,7 @@ Do not write it directly into `.claude/`, which is a protected path, and do not 
 
 Then present it like this:
 
-- **Status:** `result` (`OK` or `REVIEW`) and, if it failed, `failed_stage` and `detail`.
+- **Status:** `result` (`OK` or `REVIEW`) and, if it failed, `failed_stage` and `detail`. A `detail` without `failed_stage` says QA did not run because the environment refused its commands: list the pending items of kind `qa not run`.
 - **Acceptance tests (`test_audit`):** whether the test-auditor found weak tests and the test-author had to revise them.
 - **WPs:** a table with WP, status, files and checks, taken from `work_packages`.
 - **Verification:** each phase of `verification.phases`, with acceptance green. If its `zone_suspects` names `AT` or `QA`, the quality failure is in the acceptance tests or in QA's tests: no package can fix them, so name the files and let the person fix them or relaunch that agent.
@@ -56,7 +56,7 @@ Then present it like this:
   - Spec (contracts, correctness, security): confirmed findings, findings refuted by the verifier (and why), and finish notices;
   - Standards (section 7 and the rules): confirmed reflex findings with the rule each breaks, refuted ones, finish notices, and the waived ones with the waiver's reason;
   - whether the rules reached the agents printed or only as paths (`rules`: `printed`, `pointed` or `none`).
-- **QA:** status, plan, defects and coverage gaps. `qa_passes` says how each pass ran: `full`, `scoped` (a re-check of what was fixed) or `kept` (a Standards-only fix: the earlier report stands).
+- **QA:** status, plan, defects and coverage gaps. `qa_passes` says how each pass ran: `full`, `scoped` (a re-check of what was fixed) or `kept` (a Standards-only fix: the earlier report stands; never after a QA blocked by the environment, which is called again in full).
 - **Usage (`usage`, if recorded):** tokens by agent type from `usage.by_agent` (new input, cache read, output), and how many agents had no transcript (`missing`).
 - **Fixes:** `fix_cycles` and which WPs were fixed. A failed verification also goes to a fix cycle when `verification.suspects` names the package that owns the failure.
 - **Documentation (`docs`, if there was any):** files the doc-updater updated, whether the code map changed, and the result of `docs-check`.

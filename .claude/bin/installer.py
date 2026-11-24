@@ -13,6 +13,7 @@ import compat  # noqa: E402  - the operating-system layer, next to this file
 from core import (  # noqa: E402
     DEFAULT_CONFIG, ENTRY, ROOT, SOURCE_ROOT, at_entity, die, flow_hooks, is_old_hook_command, qa_entity, sibling
 )
+from manifest_check import code_runner_commands  # noqa: E402
 from verification import install_quality_baseline  # noqa: E402
 
 # What `install` puts in another repo: the flow, without the flow's own tests.
@@ -113,20 +114,26 @@ def merge_settings(dst, src):
     return data, added
 
 def sync_permissions(manifest):
-    """Writes to .claude/settings.local.json the permissions the agents need, so they do not ask."""
+    """Writes to .claude/settings.local.json the permissions the agents need, so they do not ask. A command that runs
+    PowerShell code gets its exact rule only, and the prefix rule an earlier sync wrote for it is removed."""
     rules = {"Workflow(" + WORKFLOW_NAME + ")", "Bash(python3 .claude/bin/agentic.py:*)"}
     rules |= set(manifest.get("allow_bash", [])) | set(qa_entity(manifest)["allow_bash"])
     rules |= set(at_entity(manifest)["allow_bash"])
+    exact_only = code_runner_commands(manifest)
     for cmd in [at_entity(manifest)["command"], *manifest.get("verify", {}).values()]:
         if cmd:
-            rules |= {f"Bash({cmd})", f"Bash({cmd}:*)"}
+            rules |= {f"Bash({cmd})"} if cmd in exact_only else {f"Bash({cmd})", f"Bash({cmd}:*)"}
     local = ROOT / ".claude" / "settings.local.json"
     data = json.loads(local.read_text(encoding="utf-8")) if local.exists() else {}
     allow = data.setdefault("permissions", {}).setdefault("allow", [])
+    removed = [r for r in allow if r in {f"Bash({cmd}:*)" for cmd in exact_only}]
+    allow[:] = [r for r in allow if r not in removed]
     added = sorted(r for r in rules if r not in allow)
     allow.extend(added)
     local.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"{len(added)} rule(s) added to .claude/settings.local.json" + (": " + ", ".join(added) if added else ""))
+    if removed:
+        print(f"{len(removed)} rule(s) removed from .claude/settings.local.json: " + ", ".join(removed))
 
 
 # ---------- install ----------

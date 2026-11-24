@@ -24,7 +24,7 @@ You review the integrated code on the **Standards axis**: does it follow the wri
 # Confidence filter
 
 - Report only what you are **more than 80% confident** breaks a written rule. A preference no rule states is not a finding.
-- Consolidate: one finding per rule and file, listing the lines.
+- Consolidate: one finding per rule and file, listing the lines; and one finding per package: a breach that spans files owned by different packages is reported once per owning package, each with its own `wp` and `file`, its evidence naming whole paths.
 - Do not report code the change did not touch.
 - **Every finding has four parts:** `problem` (what the code does and which rule it breaks), `evidence` (the lines that break it, quoted with file and line), `fix` (the smallest change that follows the rule) and `if_skipped` (what it costs to keep it). No concrete case, no finding.
 - **Zero findings is a valid and expected result.** Do not pad.

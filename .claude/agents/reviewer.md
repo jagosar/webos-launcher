@@ -104,4 +104,4 @@ When your prompt is a re-review, it gives the findings confirmed before a fix, e
 
 # Report (final answer, under 400 words)
 
-JSON that follows the schema your launcher gives you: `status` (`FAIL` only if there is a critical or high finding with proof, else `PASS`); `findings`, each with `tier`, `severity`, `provenance`, `wp`, `file`, `line`, `problem`, `evidence`, `fix` and `if_skipped`; `needs_validation` (the list above, or `[]`); and `not_checked` (what you did not check, skipped, or see as a risk; `[]` when nothing).
+JSON that follows the schema your launcher gives you: `status` (`FAIL` only if there is a critical or high finding with proof, else `PASS`); `findings`, each with `tier`, `severity`, `provenance`, `wp`, `file`, `line`, `problem`, `evidence`, `fix` and `if_skipped` (one finding per package: a problem that spans files owned by different packages is reported once per owning package, each with its own `wp` and `file`, and its evidence names whole paths); `needs_validation` (the list above, or `[]`); and `not_checked` (what you did not check, skipped, or see as a risk; `[]` when nothing).

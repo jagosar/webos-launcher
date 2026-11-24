@@ -1919,6 +1919,116 @@
           "output": "GATE: QA=2\nRESULT: OK"
         }
       ]
+    },
+    {
+      "name": "a finding that names another package's files is split",
+      "plan": {
+        "owners": {
+          "WP-01": [
+            "src/a.py"
+          ],
+          "WP-02": [
+            "src/b/"
+          ],
+          "WP-03": [
+            "src/c.py"
+          ]
+        },
+        "root": "/repo"
+      },
+      "standards": [
+        {
+          "status": "FAIL",
+          "axis": "standards",
+          "not_checked": [],
+          "findings": [
+            {
+              "wp": "WP-01",
+              "file": "/repo/src/a.py",
+              "line": 3,
+              "problem": "SPLIT-PROBLEM",
+              "evidence": "src/a.py:3 `x = 255`; src/c.py:7 `y = 255`",
+              "fix": "one named constant",
+              "if_skipped": "drift",
+              "provenance": "read",
+              "tier": "reflex",
+              "rule": "No magic numbers"
+            }
+          ]
+        },
+        {
+          "status": "PASS",
+          "axis": "standards",
+          "findings": [],
+          "not_checked": []
+        }
+      ]
+    },
+    {
+      "name": "QA blocked by the environment is pending, not a verdict",
+      "qa": [
+        {
+          "status": "BLOCKER",
+          "blocker_kind": "environment",
+          "not_run": [
+            "powershell -NoProfile -NonInteractive -File build/Invoke-Tests.ps1"
+          ],
+          "plan": [],
+          "defects": [],
+          "gaps": [
+            "the permission classifier denied the test command"
+          ],
+          "needs_validation": []
+        }
+      ]
+    },
+    {
+      "name": "QA blocked by the environment is called again after a standards-only fix",
+      "standards": [
+        {
+          "status": "FAIL",
+          "axis": "standards",
+          "not_checked": [],
+          "findings": [
+            {
+              "wp": "WP-02",
+              "file": "src/b/x.py",
+              "line": 3,
+              "problem": "STANDARDS-PROBLEM",
+              "evidence": "e",
+              "provenance": "read",
+              "tier": "reflex",
+              "rule": "No magic numbers"
+            }
+          ]
+        },
+        {
+          "status": "PASS",
+          "axis": "standards",
+          "findings": [],
+          "not_checked": []
+        }
+      ],
+      "qa": [
+        {
+          "status": "BLOCKER",
+          "blocker_kind": "environment",
+          "not_run": [
+            "pytest"
+          ],
+          "plan": [],
+          "defects": [],
+          "gaps": [],
+          "needs_validation": []
+        },
+        {
+          "status": "PASS",
+          "plan": [],
+          "defects": [],
+          "gaps": [],
+          "needs_validation": []
+        }
+      ]
     }
   ]
 }

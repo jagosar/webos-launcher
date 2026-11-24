@@ -411,7 +411,7 @@ class EngineRecordTests(unittest.TestCase):
         twice = run_scenario(scenario("needs context twice is a blocker"))
         self.assertTrue(any("WP-02=blocker" in g for g in twice["gates"]))
         in_fix = run_scenario(scenario("needs context in a fix wave is a blocker"))
-        self.assertTrue(any(g.startswith("close-stage 1 WP-01=blocker --fix") for g in in_fix["gates"]))
+        self.assertTrue(any(g.startswith("close-stage 1 WP-01=blocker@1 --fix") for g in in_fix["gates"]))
         concerns = [p for p in raw_run(scenario("concerns go to pending and to the reviewer"))["pending"]
                     if p.get("type") == "concern"]
         self.assertEqual([(c.get("severity"), c["wp"]) for c in concerns], [(None, "WP-01")])

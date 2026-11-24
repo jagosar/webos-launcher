@@ -16,7 +16,10 @@ import concurrent.futures
 import json
 import re
 
-from findings import blocks, text_sum, waiver_for, with_fingerprints
+from findings import (
+    QA_NOT_RUN_DETAIL, blocks, qa_environment_blocked, qa_not_run_items, split_by_owner, text_sum, waiver_for,
+    with_fingerprints
+)
 
 
 def lines_json(output):
@@ -82,12 +85,13 @@ CONCERNS_PROMPT = ("\nThe implementers finished with these concerns about their 
                    "Check each one: confirm it as a finding with its severity, or leave it out if the code is right.")
 
 
-def wave_states(wp_ids, reports):
+def wave_states(wp_ids, reports, fix_count=None):
     """The close-stage marks of a wave. DONE and DONE_WITH_CONCERNS are done; no report is error; anything else
-    (NEEDS_CONTEXT after its re-dispatch, BLOCKED, or a status outside the schema) is a blocker."""
+    (NEEDS_CONTEXT after its re-dispatch, BLOCKED, or a status outside the schema) is a blocker. In a fix wave
+    (fix_count given) each mark carries the attempt in this run, @N, which names the diff the next attempt reads."""
     done = ("DONE", "DONE_WITH_CONCERNS")
     return [f"{wp}={'error' if not rep else 'done' if rep.get('status') in done else 'blocker'}"
-            for wp, rep in zip(wp_ids, reports)]
+            + ("" if fix_count is None else f"@{fix_count.get(wp, 0) + 1}") for wp, rep in zip(wp_ids, reports)]
 
 
 def failing_lines(phase):
@@ -443,7 +447,8 @@ class Pipeline:
             for item in untested_items(wp, rep):
                 if not any(pending_key(p) == pending_key(item) for p in self.concern_pending):
                     self.concern_pending.append(item)
-        return f"close-stage {wave} {' '.join(wave_states(wp_ids, reports))}{' --fix' if defects_by_wp else ''}"
+        marks = wave_states(wp_ids, reports, self.fix_count if defects_by_wp else None)
+        return f"close-stage {wave} {' '.join(marks)}{' --fix' if defects_by_wp else ''}"
 
     def attempt_options(self, wp):
         """The last allowed fix attempt (2 or later) runs on the escalation model, fresh; any other continues the
@@ -598,7 +603,8 @@ class Pipeline:
         record = {}
         for axis, items in axes.items():
             mine = [f for f in graves if f["axis"] == axis]
-            record[axis] = {"confirmed": [f for f in mine if f not in refuted], "refuted": [f for f in mine if f in refuted],
+            confirmed = split_by_owner([f for f in mine if f not in refuted], self.plan.get("owners"), self.plan.get("root"))
+            record[axis] = {"confirmed": confirmed, "refuted": [f for f in mine if f in refuted],
                             "advisory": [f for f in items if f not in graves and not waiver_for(f, waivers)]}
         record["standards"]["waived"] = waived
         self.run["review"] = {"scoped": False, **record, **{k: record["spec"][k] + record["standards"][k]
@@ -659,7 +665,9 @@ class Pipeline:
         the report that stands, or None when QA gave none."""
         run, sources = self.run, self.sources_since_qa
         self.phase("QA")
-        mode = "full" if not run["qa"] or not sources else "kept" if sources == {"standards-reviewer"} else "scoped"
+        # A report the environment blocked validated nothing: it is never kept, and never re-checked in part.
+        full = not run["qa"] or not sources or qa_environment_blocked(run["qa"])
+        mode = "full" if full else "kept" if sources == {"standards-reviewer"} else "scoped"
         if mode == "full":
             report = self.call("qa", "qa", render(self.prompts["qa"], rules=self.rules), "QA")
         elif mode == "scoped":
@@ -718,13 +726,15 @@ class Pipeline:
             design = [d for d in qa["defects"] if d["kind"] == "design"]
             unassigned = [d for d in confirmed + [d for d in qa["defects"] if blocking_impl(d)] if d["wp"] not in plan["wave_of"]]
             baseline = ([{"type": "design", **d} for d in design] + [{"type": "no WP", **d} for d in unassigned]
-                        + self.needs_review + [self.needs_item("qa", i) for i in qa.get("needs_validation") or []])
+                        + self.needs_review + [self.needs_item("qa", i) for i in qa.get("needs_validation") or []]
+                        + qa_not_run_items(qa))
             close_qa = f"close-stage qa QA={'pass' if qa['status'] == 'PASS' else 'fail'}"
 
             eligible = self.split_by_limit(impl) if impl else []
             self.qa_pending = baseline
             run["pending"] = self.pending_now()
             if not eligible:
+                run["detail"] = QA_NOT_RUN_DETAIL if qa_environment_blocked(qa) else run.get("detail")
                 run["result"] = ("REVIEW" if impl or qa["status"] == "BLOCKER"
                                  or any(blocks(p, self.blocking) for p in run["pending"]) else "OK")
                 docs = run["result"] == "OK" and plan.get("docs")

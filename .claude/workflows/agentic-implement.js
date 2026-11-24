@@ -22,11 +22,8 @@ const startWave = /^\d+$/.test(String(opts.start_wave ?? '')) ? Number(opts.star
 const AGENTIC = 'python3 .claude/bin/agentic.py'
 
 // ---------- schemas ----------
-const GATE_SCHEMA = {
-  type: 'object',
-  required: ['exit_code', 'output'],
-  properties: { exit_code: { type: 'integer' }, output: { type: 'string' } },
-}
+const obj = (required, properties) => ({ type: 'object', required, properties })
+const GATE_SCHEMA = obj(['exit_code', 'output'], { exit_code: { type: 'integer' }, output: { type: 'string' } })
 const SEVERITY = { type: 'string', enum: ['critical', 'high', 'medium', 'low'] }
 // What happens to a finding: floor never ships, reflex blocks unless the plan waives it, finish never blocks.
 const JUDGE_TIER = { type: 'string', enum: ['floor', 'finish'] }
@@ -34,147 +31,72 @@ const PROVENANCE = { type: 'string', enum: ['read', 'inferred'] }
 // What the agent did not check, skipped, or sees as a risk; [] when nothing.
 const NOT_CHECKED = { type: 'array', items: { type: 'string' } }
 // A claim the code alone cannot settle: no severity, never blocks, the person checks the fact.
-const NEEDS_VALIDATION = {
-  type: 'array',
-  items: {
-    type: 'object',
-    required: ['wp', 'file', 'kind', 'claim', 'fact', 'how_to_check'],
-    properties: { wp: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer' }, kind: { type: 'string', enum: ['external', 'unchanged_code'] }, claim: { type: 'string' }, fact: { type: 'string' }, how_to_check: { type: 'string' } },
-  },
-}
-const AT_SCHEMA = {
-  type: 'object',
-  required: ['status', 'coverage', 'blocker', 'not_checked'],
-  properties: {
-    status: { type: 'string', enum: ['DONE', 'BLOCKER'] },
-    coverage: { type: 'array', items: { type: 'object', required: ['ac', 'tests'], properties: { ac: { type: 'string' }, tests: { type: 'array', items: { type: 'string' } } } } },
-    blocker: { type: ['string', 'null'] },
-    not_checked: NOT_CHECKED,
-  },
-}
-const REPORT_SCHEMA = {
-  type: 'object',
-  required: ['status', 'wp', 'files', 'checks', 'internal_decisions', 'blocker', 'not_checked', 'concerns', 'missing_context'],
-  properties: {
-    status: { type: 'string', enum: ['DONE', 'DONE_WITH_CONCERNS', 'NEEDS_CONTEXT', 'BLOCKED'] },
-    wp: { type: 'string', pattern: '^WP-[0-9]+$' },
-    files: { type: 'array', items: { type: 'string' } },
-    checks: { type: 'array', items: { type: 'object', required: ['command', 'passed'], properties: { command: { type: 'string' }, passed: { type: 'boolean' }, detail: { type: 'string' } } } },
-    internal_decisions: { type: 'array', items: { type: 'string' } },
-    blocker: { type: ['object', 'null'], required: ['missing', 'section'], properties: { missing: { type: 'string' }, section: { type: 'string' }, options: { type: 'array', items: { type: 'string' } } } },
-    not_checked: NOT_CHECKED,
-    concerns: { type: 'array', items: { type: 'string' } },
-    missing_context: { type: ['object', 'null'], required: ['what', 'section'], properties: { what: { type: 'string' }, section: { type: 'string' } } },
-  },
-}
-const AUDIT_SCHEMA = {
-  type: 'object',
-  required: ['status', 'findings', 'not_checked'],
-  properties: {
-    status: { type: 'string', enum: ['PASS', 'FAIL'] },
-    findings: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['tier', 'severity', 'wp', 'file', 'problem', 'evidence'],
-        properties: { tier: JUDGE_TIER, severity: SEVERITY, wp: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer' }, problem: { type: 'string' }, evidence: { type: 'string' } },
-      },
-    },
-    not_checked: NOT_CHECKED,
-  },
-}
+const NEEDS_VALIDATION = { type: 'array', items: obj(['wp', 'file', 'kind', 'claim', 'fact', 'how_to_check'], { wp: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer' }, kind: { type: 'string', enum: ['external', 'unchanged_code'] }, claim: { type: 'string' }, fact: { type: 'string' }, how_to_check: { type: 'string' } }) }
+const AT_SCHEMA = obj(['status', 'coverage', 'blocker', 'not_checked'], {
+  status: { type: 'string', enum: ['DONE', 'BLOCKER'] },
+  coverage: { type: 'array', items: { type: 'object', required: ['ac', 'tests'], properties: { ac: { type: 'string' }, tests: { type: 'array', items: { type: 'string' } } } } },
+  blocker: { type: ['string', 'null'] },
+  not_checked: NOT_CHECKED,
+})
+const REPORT_SCHEMA = obj(['status', 'wp', 'files', 'checks', 'internal_decisions', 'blocker', 'not_checked',
+  'concerns', 'missing_context'], {
+  status: { type: 'string', enum: ['DONE', 'DONE_WITH_CONCERNS', 'NEEDS_CONTEXT', 'BLOCKED'] },
+  wp: { type: 'string', pattern: '^WP-[0-9]+$' },
+  files: { type: 'array', items: { type: 'string' } },
+  checks: { type: 'array', items: { type: 'object', required: ['command', 'passed'], properties: { command: { type: 'string' }, passed: { type: 'boolean' }, detail: { type: 'string' } } } },
+  internal_decisions: { type: 'array', items: { type: 'string' } },
+  blocker: { type: ['object', 'null'], required: ['missing', 'section'], properties: { missing: { type: 'string' }, section: { type: 'string' }, options: { type: 'array', items: { type: 'string' } } } },
+  not_checked: NOT_CHECKED,
+  concerns: { type: 'array', items: { type: 'string' } },
+  missing_context: { type: ['object', 'null'], required: ['what', 'section'], properties: { what: { type: 'string' }, section: { type: 'string' } } },
+})
+const AUDIT_SCHEMA = obj(['status', 'findings', 'not_checked'], {
+  status: { type: 'string', enum: ['PASS', 'FAIL'] },
+  findings: { type: 'array', items: obj(['tier', 'severity', 'wp', 'file', 'problem', 'evidence'], { tier: JUDGE_TIER, severity: SEVERITY, wp: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer' }, problem: { type: 'string' }, evidence: { type: 'string' } }) },
+  not_checked: NOT_CHECKED,
+})
 // A finding has four parts: problem, evidence (the concrete case), fix and if_skipped.
-const REVIEW_SCHEMA = {
-  type: 'object',
-  required: ['status', 'findings', 'needs_validation', 'not_checked'],
-  properties: {
-    status: { type: 'string', enum: ['PASS', 'FAIL'] },
-    findings: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['tier', 'severity', 'provenance', 'wp', 'file', 'problem', 'evidence', 'fix', 'if_skipped'],
-        properties: { tier: JUDGE_TIER, severity: SEVERITY, wp: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer' }, problem: { type: 'string' }, evidence: { type: 'string' }, fix: { type: 'string' }, if_skipped: { type: 'string' }, provenance: PROVENANCE },
-      },
-    },
-    needs_validation: NEEDS_VALIDATION,
-    not_checked: NOT_CHECKED,
-  },
-}
+const REVIEW_SCHEMA = obj(['status', 'findings', 'needs_validation', 'not_checked'], {
+  status: { type: 'string', enum: ['PASS', 'FAIL'] },
+  findings: { type: 'array', items: obj(['tier', 'severity', 'provenance', 'wp', 'file', 'problem', 'evidence', 'fix', 'if_skipped'], { tier: JUDGE_TIER, severity: SEVERITY, wp: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer' }, problem: { type: 'string' }, evidence: { type: 'string' }, fix: { type: 'string' }, if_skipped: { type: 'string' }, provenance: PROVENANCE }) },
+  needs_validation: NEEDS_VALIDATION,
+  not_checked: NOT_CHECKED,
+})
 // The Standards axis: breaches of a written rule (reflex) and notes (finish); "axis" tells its report from the others.
-const STANDARDS_SCHEMA = {
-  type: 'object',
-  required: ['status', 'axis', 'findings', 'not_checked'],
-  properties: {
-    status: { type: 'string', enum: ['PASS', 'FAIL'] },
-    axis: { type: 'string', enum: ['standards'] },
-    findings: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['tier', 'rule', 'provenance', 'wp', 'file', 'problem', 'evidence', 'fix', 'if_skipped'],
-        properties: { tier: { type: 'string', enum: ['reflex', 'finish'] }, rule: { type: 'string' }, provenance: PROVENANCE, wp: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer' }, problem: { type: 'string' }, evidence: { type: 'string' }, fix: { type: 'string' }, if_skipped: { type: 'string' } },
-      },
-    },
-    not_checked: NOT_CHECKED,
-  },
-}
-const VERDICT_SCHEMA = {
-  type: 'object',
-  required: ['is_real', 'confidence', 'reasoning'],
-  properties: { is_real: { type: 'boolean' }, confidence: { type: 'number', minimum: 0, maximum: 1 }, reasoning: { type: 'string' } },
-}
-const QA_SCHEMA = {
-  type: 'object',
-  required: ['status', 'plan', 'defects', 'gaps', 'needs_validation'],
-  properties: {
-    status: { type: 'string', enum: ['PASS', 'FAIL', 'BLOCKER'] },
-    plan: { type: 'array', items: { type: 'string' } },
-    defects: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['tier', 'id', 'severity', 'wp', 'kind', 'section', 'repro', 'fix', 'if_skipped'],
-        properties: { tier: JUDGE_TIER, id: { type: 'string' }, severity: SEVERITY, wp: { type: 'string' }, kind: { type: 'string', enum: ['implementation', 'design'] }, section: { type: 'string' }, repro: { type: 'string' }, fix: { type: 'string' }, if_skipped: { type: 'string' } },
-      },
-    },
-    gaps: { type: 'array', items: { type: 'string' } },
-    needs_validation: NEEDS_VALIDATION,
-  },
-}
+const STANDARDS_SCHEMA = obj(['status', 'axis', 'findings', 'not_checked'], {
+  status: { type: 'string', enum: ['PASS', 'FAIL'] },
+  axis: { type: 'string', enum: ['standards'] },
+  findings: { type: 'array', items: obj(['tier', 'rule', 'provenance', 'wp', 'file', 'problem', 'evidence', 'fix', 'if_skipped'], { tier: { type: 'string', enum: ['reflex', 'finish'] }, rule: { type: 'string' }, provenance: PROVENANCE, wp: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer' }, problem: { type: 'string' }, evidence: { type: 'string' }, fix: { type: 'string' }, if_skipped: { type: 'string' } }) },
+  not_checked: NOT_CHECKED,
+})
+const VERDICT_SCHEMA = obj(['is_real', 'confidence', 'reasoning'], { is_real: { type: 'boolean' }, confidence: { type: 'number', minimum: 0, maximum: 1 }, reasoning: { type: 'string' } })
+const QA_SCHEMA = obj(['status', 'plan', 'defects', 'gaps', 'needs_validation'], {
+  status: { type: 'string', enum: ['PASS', 'FAIL', 'BLOCKER'] },
+  plan: { type: 'array', items: { type: 'string' } },
+  defects: { type: 'array', items: obj(['tier', 'id', 'severity', 'wp', 'kind', 'section', 'repro', 'fix', 'if_skipped'], { tier: JUDGE_TIER, id: { type: 'string' }, severity: SEVERITY, wp: { type: 'string' }, kind: { type: 'string', enum: ['implementation', 'design'] }, section: { type: 'string' }, repro: { type: 'string' }, fix: { type: 'string' }, if_skipped: { type: 'string' } }) },
+  gaps: { type: 'array', items: { type: 'string' } },
+  needs_validation: NEEDS_VALIDATION,
+  // Optional: a BLOCKER the environment caused (a command refused, a tool missing), and the commands QA could not run.
+  blocker_kind: { type: 'string', enum: ['environment', 'design'] },
+  not_run: { type: 'array', items: { type: 'string' } },
+})
 // A re-review: one verdict per fingerprint it was given; anything new is recorded and never reopens the fix.
 const TEXT = { type: 'string' }
-const VERDICT_ITEM = {
-  type: 'object',
-  required: ['fingerprint', 'verdict', 'evidence'],
-  properties: { fingerprint: TEXT, verdict: { type: 'string', enum: ['ADDRESSED', 'NOT_ADDRESSED'] }, evidence: TEXT },
-}
-const NEW_FINDING = {
-  type: 'object',
-  required: ['tier', 'wp', 'file', 'problem', 'evidence'],
-  properties: { tier: { type: 'string', enum: ['floor', 'reflex', 'finish'] }, wp: TEXT, file: TEXT, problem: TEXT, evidence: TEXT },
-}
-const RE_REVIEW_SCHEMA = {
-  type: 'object',
-  required: ['status', 'verdicts', 'new_findings', 'not_checked'],
-  properties: {
-    status: { type: 'string', enum: ['PASS', 'FAIL'] },
-    verdicts: { type: 'array', items: VERDICT_ITEM },
-    new_findings: { type: 'array', items: NEW_FINDING },
-    not_checked: NOT_CHECKED,
-  },
-}
-const DOCS_SCHEMA = {
-  type: 'object',
-  required: ['status', 'files', 'changes', 'unverified', 'blocker'],
-  properties: {
-    status: { type: 'string', enum: ['DONE', 'BLOCKER'] },
-    files: { type: 'array', items: { type: 'string' } },
-    changes: { type: 'array', items: { type: 'string' } },
-    unverified: { type: 'array', items: { type: 'string' } },
-    blocker: { type: ['string', 'null'] },
-  },
-}
+const VERDICT_ITEM = obj(['fingerprint', 'verdict', 'evidence'], { fingerprint: TEXT, verdict: { type: 'string', enum: ['ADDRESSED', 'NOT_ADDRESSED'] }, evidence: TEXT })
+const NEW_FINDING = obj(['tier', 'wp', 'file', 'problem', 'evidence'], { tier: { type: 'string', enum: ['floor', 'reflex', 'finish'] }, wp: TEXT, file: TEXT, problem: TEXT, evidence: TEXT })
+const RE_REVIEW_SCHEMA = obj(['status', 'verdicts', 'new_findings', 'not_checked'], {
+  status: { type: 'string', enum: ['PASS', 'FAIL'] },
+  verdicts: { type: 'array', items: VERDICT_ITEM },
+  new_findings: { type: 'array', items: NEW_FINDING },
+  not_checked: NOT_CHECKED,
+})
+const DOCS_SCHEMA = obj(['status', 'files', 'changes', 'unverified', 'blocker'], {
+  status: { type: 'string', enum: ['DONE', 'BLOCKER'] },
+  files: { type: 'array', items: { type: 'string' } },
+  changes: { type: 'array', items: { type: 'string' } },
+  unverified: { type: 'array', items: { type: 'string' } },
+  blocker: { type: ['string', 'null'] },
+})
 
 // ---------- utilities ----------
 const safe = (p, label) => p.catch(err => { log(`${label} failed: ${String((err && err.message) || err)}`); return null })
@@ -251,6 +173,60 @@ const withFingerprints = findings => {
     return { ...f, fingerprint: seen[fp] === 1 ? fp : `${fp}-${seen[fp]}` }
   })
 }
+// findings.py's split_by_owner: a confirmed finding whose evidence or fix names files of other packages (whole paths,
+// root removed, ASCII case folded) keeps its own files in "scope" and gets one part per other owner, in id order.
+const lowAscii = t => t.replace(/[A-Z]/g, c => c.toLowerCase())
+const noRoot = (text, root) => {
+  const t = text.replace(/\\/g, '/')
+  const needle = lowAscii(root.replace(/\\/g, '/') + '/')
+  const low = lowAscii(t)
+  if (!root) return t
+  let out = ''
+  let i = 0
+  for (let j = low.indexOf(needle); j >= 0; j = low.indexOf(needle, i)) { out += t.slice(i, j); i = j + needle.length }
+  return out + t.slice(i)
+}
+const pathRe = f => new RegExp('(?<![A-Za-z0-9_./-])' + lowAscii(f).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+  (f.endsWith('/') ? '' : '(?![A-Za-z0-9_-])'))
+const named = (files, low) => files.filter(f => typeof f === 'string' && f && pathRe(f).test(low))
+const str = v => (typeof v === 'string' ? v : '')
+const splitByOwner = findings => {
+  const owners = plan.owners && typeof plan.owners === 'object' && !Array.isArray(plan.owners) ? plan.owners : {}
+  const root = str(plan.root)
+  const taken = new Set(findings.map(f => f && f.fingerprint))
+  return findings.flatMap(f => {
+    if (!f || typeof f !== 'object') return [f]
+    const wp = typeof f.wp === 'string' ? f.wp : null
+    const low = lowAscii(noRoot(str(f.evidence) + '\n' + str(f.fix), root))
+    const others = Object.keys(owners).sort().filter(o => o !== wp && Array.isArray(owners[o]))
+      .map(o => [o, named(owners[o], low)]).filter(([, files]) => files.length)
+    if (!others.length) return [f]
+    const own = noRoot(str(f.file), root)
+    const mine = wp !== null && Array.isArray(owners[wp]) ? named(owners[wp], low) : []
+    return [{ ...f, scope: [...new Set([...(own ? [own] : []), ...mine])].sort() }, ...others.map(([o, files]) => {
+      const scope = [...new Set(files)].sort()
+      const part = { ...f, wp: o, file: scope[0], scope, split_from: f.fingerprint ?? null }
+      delete part.line
+      const base = fingerprint(part)
+      let fp = base
+      for (let n = 2; taken.has(fp); n += 1) fp = `${base}-${n}`
+      taken.add(fp)
+      return { ...part, fingerprint: fp }
+    })]
+  })
+}
+// findings.py's QA helpers: a report the environment blocked is pending, one item per command QA could not run.
+const QA_NOT_RUN_DETAIL = 'QA did not run: the environment refused its commands ' +
+  '(see the pending items of kind "qa not run")'
+const qaEnvironmentBlocked = qa => !!qa && qa.status === 'BLOCKER' && qa.blocker_kind === 'environment'
+const notRunItem = (cmd, how) => ({ type: 'needs validation', source: 'qa', wp: null, file: null,
+  kind: 'qa not run', problem: cmd, claim: cmd, fact: 'not run: the environment refused it', how_to_check: how })
+const qaNotRunItems = qa => {
+  if (!qaEnvironmentBlocked(qa)) return []
+  const cmds = [...new Set((Array.isArray(qa.not_run) ? qa.not_run : []).filter(c => typeof c === 'string'))]
+  return cmds.length ? cmds.map(c => notRunItem(c, `run ${c}`))
+    : [notRunItem('QA\'s validation', 'allow QA\'s test commands, then run /implement again')]
+}
 // Each agent reads the slice of architecture.md that `agentic.py briefs` wrote for it, not the whole document.
 const brief = id => `.claude/state/briefs/${id}.md`
 const REFUTE_CONFIDENCE = 0.7
@@ -295,7 +271,8 @@ const untestedItems = (wp, rep) =>
   (rep && Array.isArray(rep.checks) ? rep.checks : []).filter(notRun).map(c => untestedItem(wp, c))
 // Close-stage marks: DONE and DONE_WITH_CONCERNS are done, no report is error, anything else is a blocker.
 const DONE_STATUSES = new Set(['DONE', 'DONE_WITH_CONCERNS'])
-const waveStates = (wpIds, reports) => wpIds.map((wp, i) => `${wp}=${!reports[i] ? 'error' : DONE_STATUSES.has(reports[i].status) ? 'done' : 'blocker'}`)
+// In a fix wave (counts given) each mark carries the attempt in this run, @N: it names the diff the next attempt reads.
+const waveStates = (wpIds, reports, counts) => wpIds.map((wp, i) => `${wp}=${!reports[i] ? 'error' : DONE_STATUSES.has(reports[i].status) ? 'done' : 'blocker'}${counts ? `@${(counts[wp] || 0) + 1}` : ''}`)
 // The stop gate's denials in a close-stage output ("GATE: WP-01=1 WP-02=0"), per package; {} if absent.
 const gateLine = out => {
   const m = String(out || '').match(/^GATE: (.*)$/m)
@@ -436,7 +413,7 @@ async function launchWave(wave, wpIds, defectsByWp) {
       if (!concernPending.some(p => pendingKey(p) === pendingKey(item))) concernPending.push(item)
     }
   })
-  return { reports: withContext, closeCmd: `close-stage ${wave} ${waveStates(wpIds, withContext).join(' ')}${defectsByWp ? ' --fix' : ''}` }
+  return { reports: withContext, closeCmd: `close-stage ${wave} ${waveStates(wpIds, withContext, defectsByWp ? fixCount : null).join(' ')}${defectsByWp ? ' --fix' : ''}` }
 }
 
 // NEEDS_CONTEXT in an implement wave: one more call with the whole document, once, replacing the report; not in fixes.
@@ -598,7 +575,7 @@ const fullReview = async post => {
   for (const axis of ['spec', 'standards']) {
     const mine = graves.filter(f => f.axis === axis)
     record[axis] = {
-      confirmed: mine.filter(f => !refuted.includes(f)),
+      confirmed: splitByOwner(mine.filter(f => !refuted.includes(f))),
       refuted: mine.filter(f => refuted.includes(f)),
       advisory: axes[axis].filter(f => !graves.includes(f) && !waiverFor(f, WAIVERS)),
     }
@@ -633,6 +610,8 @@ const reReviewStage = async post => {
     `${JSON.stringify(open[axis])}\n` +
     `The fix's diffs are ${diffs}: read them and the code they changed. ` +
     'For each fingerprint say ADDRESSED or NOT_ADDRESSED, with the line that shows it. ' +
+    'A finding with a "scope" is judged only in those files: ' +
+    'what its evidence says about other files is another package\'s finding. ' +
     'Report anything new in new_findings: it is recorded and does not block this run.' + (axis === 'standards' ? RULES : ''),
     { agentType: REVIEW_SOURCES[axis], label: `${REVIEW_SOURCES[axis]} (re-review)`, schema: RE_REVIEW_SCHEMA })))
   const reports = {}
@@ -688,7 +667,9 @@ const fixDiffs = (wps, countAt) => wps.flatMap(wp => {
 const qaStage = async () => {
   phase('QA')
   const onlyStandards = sourcesSinceQa.size === 1 && sourcesSinceQa.has('standards-reviewer')
-  const mode = !run.qa || sourcesSinceQa.size === 0 ? 'full' : onlyStandards ? 'kept' : 'scoped'
+  // A report the environment blocked validated nothing: it is never kept, and never re-checked in part.
+  const full = !run.qa || sourcesSinceQa.size === 0 || qaEnvironmentBlocked(run.qa)
+  const mode = full ? 'full' : onlyStandards ? 'kept' : 'scoped'
   const scope = [...fixedSinceQa].sort()
   const prompt = mode === 'full' ? 'Run the system\'s QA validation according to architecture.md.'
     : 'Re-check the system after a fix, according to architecture.md. ' +
@@ -812,13 +793,14 @@ while (true) {
   const unassigned = [...confirmed, ...qa.defects.filter(d => d.kind === 'implementation' && blocks(d))]
     .filter(d => !isWp(d.wp))
   const baseline = [...designDefects.map(d => ({ type: 'design', ...d })), ...unassigned.map(d => ({ type: 'no WP', ...d })),
-    ...needsReview, ...(qa.needs_validation || []).map(i => needsItem('qa', i))]
+    ...needsReview, ...(qa.needs_validation || []).map(i => needsItem('qa', i)), ...qaNotRunItems(qa)]
   const closeQa = `close-stage qa QA=${qa.status === 'PASS' ? 'pass' : 'fail'}`
 
   const eligible = implDefects.length ? splitByLimit(implDefects) : []
   qaPending = baseline
   run.pending = pendingNow()
   if (eligible.length === 0) {
+    if (qaEnvironmentBlocked(qa)) run.detail = QA_NOT_RUN_DETAIL
     run.result = implDefects.length || qa.status === 'BLOCKER' || run.pending.some(p => blocks(p)) ? 'REVIEW' : 'OK'
     const docs = run.result === 'OK' && plan.docs
     const fin = await closeSeq([closeQa, ...(docs ? [...(plan.codemap ? ['codemap'] : []), 'open-stage docs'] : [])], 'close-stage qa')

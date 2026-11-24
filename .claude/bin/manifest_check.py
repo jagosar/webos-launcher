@@ -32,6 +32,14 @@ OPEN_ENDED = {"bash", "sh", "zsh", "fish", "dash", "python", "python3", "node", 
               "php", "env", "xargs", "sudo", "eval", "exec", "npx", "npm", "pnpm", "yarn", "uv", "poetry",
               "cargo", "go", "make", "git", "claude", "find", "awk", "sed"}
 
+# A shell named alone (one word, no arguments) runs whatever comes after it. Kept apart from OPEN_ENDED, which
+# open_ended_command also reads for verify commands.
+SHELLS_ALONE = {"powershell", "pwsh", "powershell.exe", "pwsh.exe", "cmd", "cmd.exe"}
+
+# The programs whose flags run inline code (issue 118): -Command and -EncodedCommand, and their abbreviations.
+CODE_SHELLS = {"powershell", "pwsh"}
+FILE_FLAGS = {"-f", "-file"}
+
 FRONTMATTER_MODEL_RE = re.compile(r"\A---\s*\n(.*?)\n---", re.S)
 
 
@@ -41,7 +49,52 @@ def open_ended_rule(rule):
     inner = rule[len("Bash("):-1].strip()
     prefix = inner[:-2] if inner.endswith(":*") else inner
     tokens = prefix.split()
-    return inner in ("*", ":*", "") or not tokens or "*" in prefix or (len(tokens) == 1 and tokens[0] in OPEN_ENDED)
+    if inner in ("*", ":*", "") or not tokens or "*" in prefix or (len(tokens) == 1 and tokens[0] in OPEN_ENDED):
+        return True
+    if len(tokens) == 1 and tokens[0].lower() in SHELLS_ALONE:
+        return True
+    return inner.endswith(":*") and runs_code(words(prefix))
+
+def words(text):
+    """A command's words as a shell reads them, with Windows separators kept: an unquoted \\ is an escape to shlex."""
+    text = text.replace("\\", "/")
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return text.split()
+
+def is_code_flag(flag):
+    return flag in ("-c", "-e", "-ec") or (len(flag) >= 3 and "-command".startswith(flag)) or (
+        len(flag) >= 4 and "-encodedcommand".startswith(flag))
+
+def runs_code(tokens):
+    """Whether a PowerShell command line (its words) runs inline code: true unless a -File / -f comes before every
+    -Command / -EncodedCommand flag (or an abbreviation of them, or a / form). False for any other program."""
+    if not tokens:
+        return False
+    program = re.split(r"[/\\]", tokens[0])[-1].lower()
+    program = program[:-4] if program.endswith(".exe") else program
+    if program not in CODE_SHELLS:
+        return False
+    for token in tokens[1:]:
+        flag = token.lower()
+        flag = "-" + flag[1:] if flag.startswith("/") else flag
+        if flag in FILE_FLAGS:
+            return False
+        if is_code_flag(flag):
+            return True
+    return True
+
+def code_runner_commands(manifest):
+    """The acceptance and verify commands that run PowerShell code: allowed only exactly, never as a prefix."""
+    acceptance, verify = manifest.get("acceptance"), manifest.get("verify")
+    commands = [acceptance.get("command") if isinstance(acceptance, dict) else None]
+    commands += list(verify.values()) if isinstance(verify, dict) else []
+    found = []
+    for cmd in commands:
+        if isinstance(cmd, str) and cmd not in found and runs_code(words(cmd)):
+            found.append(cmd)
+    return found
 
 def open_ended_command(cmd):
     """An acceptance or verify command that would become an open permission once synced into Bash(<cmd>:*), where
@@ -76,7 +129,8 @@ WP_ACS_WARN = 8
 WAVE_WPS_WARN = 8
 
 def complexity_warnings(manifest):
-    """What makes a plan hard to run in parallel or to review: oversized packages, crowded waves, a chain."""
+    """What makes a plan hard to run in parallel or to review (oversized packages, crowded waves, a chain), and the
+    commands that run PowerShell code, which can only be allowed exactly."""
     warnings, waves = [], {}
     packages = [wp for wp in manifest.get("work_packages", []) if isinstance(wp, dict) and "id" in wp]
     for wp in packages:
@@ -94,6 +148,9 @@ def complexity_warnings(manifest):
                             "consider another wave")
     if len(waves) >= 2 and all(len(ids) == 1 for ids in waves.values()):
         warnings.append("every wave holds one package: the plan is a chain, nothing runs in parallel")
+    for cmd in code_runner_commands(manifest):
+        warnings.append(f"'{cmd}' runs PowerShell code: it is allowed only as the exact command, so an agent that runs "
+                        "a subset of it is asked. Use a runner script with -File (.claude/rules-library/powershell.md)")
     return warnings
 
 def maintainer_errors(manifest):

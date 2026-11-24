@@ -183,7 +183,7 @@ test('uncertain refutation: the finding stands and its WP is fixed', async () =>
   assert.equal(result.fix_cycles, 1)
   const fix = calls.find(c => c.label === 'WP-02 (fix)')
   assert.ok(fix && fix.prompt.includes('Fix WP-02'), 'the WP receives its defects')
-  assert.ok(gates.includes('close-stage 1 WP-02=done --fix'), 'the fix counts as a fix cycle')
+  assert.ok(gates.includes('close-stage 1 WP-02=done@1 --fix'), 'the fix counts as a fix cycle')
   assert.ok(!calls.some(c => c.label === 'WP-01 (fix)'), 'only the affected WP is fixed')
 })
 
@@ -419,7 +419,7 @@ test('verification that fails on a package: that package is fixed, then verifica
   assert.ok(fix.prompt.includes('verification fails (tests) on AC-002') && fix.prompt.includes('FAILED src/b/x.py'), 'with the evidence')
   assert.ok(!calls.some(c => c.type === 'reviewer') || gates.indexOf('verify') < gates.indexOf('close-stage review REVIEW=pass'), 'review only after verification passes')
   assert.equal(verifies, 2)
-  assert.ok(gates.includes('close-stage 1 WP-02=done --fix'))
+  assert.ok(gates.includes('close-stage 1 WP-02=done@1 --fix'))
 })
 
 test('verification that fails with no owner: stops, as there is nobody to fix it', async () => {

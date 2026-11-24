@@ -25,7 +25,7 @@
     "doc_updater": "Update the documentation according to architecture.md and the integrated code.",
     "implement_full": "Implement {wp}. Your first attempt returned NEEDS_CONTEXT: {missing}. This time your brief is architecture.md, whole: read it and implement. If the document does not settle it, return BLOCKED with the section that should.{rules}",
     "standards_reviewer": "Review the integrated code against section 7 of architecture.md and the rules below. Report only breaches of a written rule: name it in \"rule\".{rules}",
-    "re_review": "Re-review the fix, on the {axis} axis only. These findings were confirmed before the fix, each with its fingerprint, as JSON:\n{findings}\nThe fix's diffs are {diffs}: read them and the code they changed. For each fingerprint say ADDRESSED or NOT_ADDRESSED, with the line that shows it. Report anything new in new_findings: it is recorded and does not block this run.{rules}"
+    "re_review": "Re-review the fix, on the {axis} axis only. These findings were confirmed before the fix, each with its fingerprint, as JSON:\n{findings}\nThe fix's diffs are {diffs}: read them and the code they changed. For each fingerprint say ADDRESSED or NOT_ADDRESSED, with the line that shows it. A finding with a \"scope\" is judged only in those files: what its evidence says about other files is another package's finding. Report anything new in new_findings: it is recorded and does not block this run.{rules}"
   },
   "schemas": {
     "gatekeeper": {
@@ -645,6 +645,19 @@
                 "type": "string"
               }
             }
+          }
+        },
+        "blocker_kind": {
+          "type": "string",
+          "enum": [
+            "environment",
+            "design"
+          ]
+        },
+        "not_run": {
+          "type": "array",
+          "items": {
+            "type": "string"
           }
         }
       }
