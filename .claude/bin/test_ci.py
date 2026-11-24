@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_definitions import FLOW_REPO_ONLY, ROOT  # noqa: E402
 
 WORKFLOWS = ROOT / ".github" / "workflows"
+GUARD = "github.repository == 'jagosar/agentic-ai-forge'"  # the jobs that run only in the flow's own repo
 
 
 def block(text, header_re):
@@ -53,8 +54,7 @@ class CiTests(unittest.TestCase):
 
     def test_the_history_job_checks_on_a_full_clone_and_the_others_stay_shallow(self):
         job = block(self.ci, r"^  history:")
-        for needle in ("github.repository == 'jagosar/agentic-flow'", "fetch-depth: 0", "persist-credentials: false",
-                       "agentic.py flow-history --check"):
+        for needle in (GUARD, "fetch-depth: 0", "persist-credentials: false", "agentic.py flow-history --check"):
             self.assertIn(needle, job)
         for name in ("test", "installed", "plugin"):
             self.assertNotIn("fetch-depth", block(self.ci, rf"^  {name}:"))
@@ -82,8 +82,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertRegex(block(self.text, r"^jobs:"), r"permissions:\s*\n\s+contents: write")
 
     def test_guards_and_hardening(self):
-        for needle in ("fetch-depth: 0", "persist-credentials: false", "github.repository == 'jagosar/agentic-flow'",
-                       "github.ref == 'refs/heads/main'", "GH_TOKEN"):
+        for needle in ("fetch-depth: 0", "persist-credentials: false", GUARD, "github.ref == 'refs/heads/main'",
+                       "GH_TOKEN"):
             self.assertIn(needle, self.text)
         self.assertNotIn("softprops", self.text)
         for script in run_scripts(self.text):

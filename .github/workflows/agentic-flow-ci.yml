@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   test:
-    if: github.repository == 'jagosar/agentic-flow'
+    if: github.repository == 'jagosar/agentic-ai-forge'
     runs-on: ${{ matrix.os }}
     # Windows is slower at starting processes and running git, and this suite is mostly subprocesses.
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 15 }}
@@ -83,7 +83,7 @@ jobs:
   # The flow as a project receives it: installed into an empty repository, where the shipped tests must pass
   # too. A test that only holds in this repository (its README, its skills, its own scripts) is caught here.
   installed:
-    if: github.repository == 'jagosar/agentic-flow'
+    if: github.repository == 'jagosar/agentic-ai-forge'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -122,7 +122,7 @@ jobs:
   # untagged version (a release pull request regenerates it as its last commit). It needs the whole history and the
   # tags, so it runs once on a full clone instead of in the shallow matrix.
   history:
-    if: github.repository == 'jagosar/agentic-flow'
+    if: github.repository == 'jagosar/agentic-ai-forge'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -137,7 +137,7 @@ jobs:
         run: python .claude/bin/agentic.py flow-history --check
 
   plugin:
-    if: github.repository == 'jagosar/agentic-flow'
+    if: github.repository == 'jagosar/agentic-ai-forge'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

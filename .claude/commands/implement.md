@@ -68,7 +68,7 @@ Then present it like this:
 - **Not checked (`not_checked`):** per agent, what it did not check or skipped, plus QA's `gaps` and the doc-updater's `unverified`.
 - **Stages the hook did not guard:** a stage `check` that contains `GUARDRAIL HOOK SAW NO FLOW AGENT` means files changed with no hook call from an agent of the flow, so only the file comparison applied. Say so, and point to the `agent_type` recorded in `.claude/state/hook-seen.json` and to `/implement fallback`.
 - **Environment retries (`environment_retries`):** the calls that were repeated once because the reply was lost or the interpreter crashed before `agentic.py` answered (only prepare and opening a stage). Each names the call, its exit code and the start of its output; one that keeps appearing points at the machine, not the code.
-- **Gate denials (`gate_denials`):** per WP, how many times the stop gate refused a finished report because its acceptance tests failed. A package with denials and no later fix cycle is a good sign; one at the cap of two deserves a look at its tests.
+- **Gate denials (`gate_denials`):** per WP, how many times the stop gate refused a finished report because its acceptance tests failed; an `AT` or `QA` entry means the test-author or QA was held to the quality limits of its own files. A package with denials and no later fix cycle is a good sign; one at the cap of two deserves a look at its tests.
 - **Failed verifications (`verification_failures`):** each one's blocking phases and suspects, when a verification sent packages to a fix cycle.
 
 If `result` is `OK`, propose the commit messages (one per logical block, in the format of section 7) and **wait for the user's approval**. Do not commit or push without it.
