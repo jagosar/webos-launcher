@@ -12,152 +12,18 @@ which agentic.py binds to real commands and real `claude -p` runs, and the tests
 holds only what a call sets: model= (the last fix attempt, escalated), resume=True (the other fix attempts: continue
 the package's own session, which only the fallback can) and schema= (a re-review, whose report is not the agent's).
 """
-import concurrent.futures
-import json
 import re
 
 from findings import (
-    QA_NOT_RUN_DETAIL, blocks, qa_environment_blocked, qa_not_run_items, split_by_owner, text_sum, waiver_for,
+    QA_NOT_RUN_DETAIL, blocks, qa_environment_blocked, qa_not_run_items, split_by_owner, waiver_for,
     with_fingerprints
 )
-
-
-def lines_json(output):
-    """The last line of the output that is a JSON object, parsed; None if there is none."""
-    lines = [ln for ln in str(output or "").strip().split("\n") if ln.strip().startswith("{")]
-    try:
-        return json.loads(lines[-1]) if lines else None
-    except ValueError:
-        return None
-
-
-def compact(value):
-    """JSON as the workflow's JSON.stringify writes it, so both engines send agents the same text."""
-    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
-
-
-PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
-
-
-def render(template, **values):
-    """Every {name} of the template replaced in one pass: inserted text (a printed rule, a caller) is never expanded."""
-    return PLACEHOLDER_RE.sub(lambda m: str(values[m.group(1)]) if m.group(1) in values else m.group(0), template)
-
-
-def brief(ident):
-    """Where `agentic.py briefs` writes the slice of architecture.md an agent reads."""
-    return f".claude/state/briefs/{ident}.md"
-
-
-def threaded(thunks):
-    if not thunks:
-        return []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(thunks)) as pool:
-        return list(pool.map(lambda t: t(), thunks))
-
-
-# verify and baseline run the whole suite: each goes in a gatekeeper call of its own, so it fits in one Bash timeout.
-WAVE_TAIL = ["verify", "open-stage review", "callers"]
-ANSWERED = (0, 1, 3)  # agentic.py's own exits: success, die(), a refusal; any other with no JSON is a crash
-RETRY_OUTPUT = 300  # characters of a crashed step's output kept in environment_retries
-NOT_RUN_RE = re.compile(r"^\s*not run:", re.I)  # an implementer check it could not run
-HOOKS_DEAD = ("the guardrail hook is not running in this session: run `agentic.py hooks-check` for the cause, or use /implement fallback")
-LOST = ("the gatekeeper returned no usable result (a timeout or garbled output); the command may have run anyway: "
-        "check `agentic.py status` before resuming")
-
-
-class Halted(BaseException):
-    """Someone ran `agentic.py stop`: not an error of an agent, so it is not swallowed with them."""
-
-
-CALLERS_PROMPT = ("\nCallers, outside the diff, of the public symbols this change defines or modifies (the reviewer must read them), as JSON:\n{items}\nA change that breaks one of them is a finding on the package that owns the changed symbol, even though the caller's file was not touched.{truncated}")
-CALLERS_TRUNCATED = " The list is truncated."
-
-
-def callers_of(step):
-    """(callers, truncated) a `callers` step reported; ([], False) when the step is missing, failed or is not its JSON."""
-    found = lines_json(step["output"]) if step else None
-    items = found.get("callers") if isinstance(found, dict) else None
-    return (items, bool(found.get("truncated"))) if isinstance(items, list) and items else ([], False)
-
-
-CONCERNS_PROMPT = ("\nThe implementers finished with these concerns about their own code, as JSON:\n{items}\n"
-                   "Check each one: confirm it as a finding with its severity, or leave it out if the code is right.")
-
-
-def wave_states(wp_ids, reports, fix_count=None):
-    """The close-stage marks of a wave. DONE and DONE_WITH_CONCERNS are done; no report is error; anything else
-    (NEEDS_CONTEXT after its re-dispatch, BLOCKED, or a status outside the schema) is a blocker. In a fix wave
-    (fix_count given) each mark carries the attempt in this run, @N, which names the diff the next attempt reads."""
-    done = ("DONE", "DONE_WITH_CONCERNS")
-    return [f"{wp}={'error' if not rep else 'done' if rep.get('status') in done else 'blocker'}"
-            + ("" if fix_count is None else f"@{fix_count.get(wp, 0) + 1}") for wp, rep in zip(wp_ids, reports)]
-
-
-def failing_lines(phase):
-    """A failing phase's lines for a fix: its new failures, else its failing lines, else the end of its output."""
-    for key in ("new_failures", "failing_lines"):
-        if isinstance(phase.get(key), list) and phase[key]:
-            return phase[key]
-    return phase.get("tail") or []
-
-
-def gate_line(output):
-    """The stop gate's denials in a close-stage output ("GATE: WP-01=1 WP-02=0"), per package; {} if absent."""
-    m = re.search(r"^GATE: (.*)$", str(output or ""), re.M)
-    return {k: int(v) for k, v in re.findall(r"(WP-\d+|AT|QA)=(\d+)", m.group(1))} if m else {}
-
-
-def concern_item(wp, text):
-    """A pending item for a DONE_WITH_CONCERNS doubt: no severity, so it never blocks; the reviewer weighs it."""
-    return {"type": "concern", "source": wp, "wp": wp, "problem": text}
-
-
-def untested_items(wp, report):
-    """A needs-validation item for each check the implementer reported it could not run (passed false, a detail that
-    starts with "not run:"): never a blocker; the person runs it."""
-    checks = report.get("checks") if isinstance(report, dict) else None
-    return [{"type": "needs validation", "source": wp, "wp": wp, "file": None, "kind": "tests not run",
-             "problem": c["command"], "claim": c["command"], "fact": c["detail"], "how_to_check": f"run {c['command']}"}
-            for c in checks or [] if not_run(c)]
-
-
-def not_run(check):
-    """A check reported as not run: passed false and a detail that starts with "not run:"."""
-    return (isinstance(check, dict) and check.get("passed") is False and isinstance(check.get("command"), str)
-            and isinstance(check.get("detail"), str) and bool(NOT_RUN_RE.match(check["detail"])))
-
-
-def missing_context(report):
-    """What a NEEDS_CONTEXT report asked for, as text, or None when the report is malformed (then it is a blocker)."""
-    mc = report.get("missing_context")
-    if not isinstance(mc, dict) or not isinstance(mc.get("what"), str):
-        return None
-    return mc["what"] + (f" (section {mc['section']})" if isinstance(mc.get("section"), str) and mc["section"] else "")
-
-
-def pending_key(d):
-    """One pending item per package, source, file and problem: the same defect is listed once, not once per cycle."""
-    return (d.get("wp"), d.get("source"), d.get("file"), d.get("problem") or d.get("repro"))
-
-
-REVIEW_SOURCES = {"spec": "reviewer", "standards": "standards-reviewer"}
-AXES = ("spec", "standards")
-AXIS_NAMES = {"spec": "Spec", "standards": "Standards"}
-NO_RE_REVIEW = {"spec": "the reviewer returned no re-review report",
-                "standards": "the standards reviewer returned no re-review report"}
-RE_REVIEW_SCHEMA = "re-review"
-POINTED_RULES = " Rules you must follow (language and common): {paths}."
-
-
-def rules_of(plan):
-    """(text for the prompts, how it arrived): the printed rules when they arrived whole, else their paths."""
-    text = plan.get("rules_text")
-    if isinstance(text, str) and text and text_sum(text) == plan.get("rules_sum"):
-        return text, "printed"
-    if plan.get("rules"):
-        return render(POINTED_RULES, paths=", ".join(plan["rules"])), "pointed"
-    return "", "none"
+from pipeline_parts import (  # noqa: F401 - re-exported: launch.py and the tests read them as pipeline.<name>
+    lines_json, compact, PLACEHOLDER_RE, render, brief, threaded, WAVE_TAIL, ANSWERED, RETRY_OUTPUT, NOT_RUN_RE,
+    HOOKS_DEAD, LOST, Halted, CALLERS_PROMPT, CALLERS_TRUNCATED, callers_of, CONCERNS_PROMPT, wave_states,
+    failing_lines, gate_line, concern_item, untested_items, not_run, missing_context, pending_key, REVIEW_SOURCES,
+    AXES, AXIS_NAMES, NO_RE_REVIEW, RE_REVIEW_SCHEMA, POINTED_RULES, rules_of, acceptance_blocked
+)
 
 
 class Pipeline:
@@ -173,12 +39,12 @@ class Pipeline:
         self.wave_done = wave_done
         self.plan = None
         self.rules = ""
-        self.impl_rules = ""  # the implementer's: the same, unless the plan keeps the rules away from it
         self.fix_count, self.fix_history, self.limit_pending = {}, {}, []
         self.qa_pending = []  # the last QA's design and no-WP items: they stay listed whatever comes after
         self.needs_review = []  # the last review's needs-validation items
         self.concern_pending = []  # DONE_WITH_CONCERNS doubts, kept across cycles and handed to every review
         self.context_given = set()  # packages already re-dispatched once with the whole document
+        self.repaired = False  # the acceptance repair runs once per run (design 0032)
         # The review after the first full one is scoped: the confirmed findings of the packages fixed since then.
         self.reviewed, self.fixed_since_review, self.fix_count_at_review = False, set(), {}
         # QA after its first pass re-checks the packages fixed since, unless only Standards findings were fixed.
@@ -188,7 +54,7 @@ class Pipeline:
         self.run = {"result": "REVIEW", "stages": [], "baseline": None, "work_packages": {}, "verification": None,
                     "review": None, "qa": None, "test_audit": None, "docs": None, "fix_cycles": 0, "pending": [],
                     "not_checked": [], "gate_denials": {}, "verification_failures": [], "agent_calls": 0,
-                    "environment_retries": [], "qa_passes": []}
+                    "environment_retries": [], "qa_passes": [], "acceptance_repairs": []}
 
     # ---------- utilities ----------
     def stop(self, stage, detail, **extra):
@@ -340,7 +206,6 @@ class Pipeline:
                              gate=plan_step)
         plan = self.plan
         self.rules, self.run["rules"] = rules_of(plan)
-        self.impl_rules = "" if plan.get("implementer_rules") is False else self.rules
         short = self.budget_at_start()
         if short:
             return short
@@ -380,7 +245,7 @@ class Pipeline:
         open_ = self.step(self.seq_retry(["open-stage acceptance"], "open-stage acceptance"), 0)
         if not self.ok(open_):
             return self.stop("wave 0", "the acceptance stage could not be opened", gate=open_)
-        prompt = render(self.prompts["test_author"], brief=brief("AT"), rules=self.rules)
+        prompt = render(self.prompts["test_author"], brief=brief("AT"))
         round_ = 0
         while True:
             label = "test-author (revision)" if round_ else "test-author"
@@ -413,7 +278,7 @@ class Pipeline:
             reopen = self.step(self.seq_retry(["open-stage acceptance"], "open-stage acceptance"), 0)
             if not self.ok(reopen):
                 return self.stop("wave 0", "the acceptance stage could not be reopened", gate=reopen)
-            prompt = render(self.prompts["test_author_revision"], brief=brief("AT"), weak=compact(weak), rules=self.rules)
+            prompt = render(self.prompts["test_author_revision"], brief=brief("AT"), weak=compact(weak))
             round_ += 1
 
     def launch_wave(self, wave, wp_ids, defects_by_wp):
@@ -422,7 +287,7 @@ class Pipeline:
         def thunk(wp):
             def go():
                 if not defects_by_wp:
-                    prompt = render(self.prompts["implement"], wp=wp, brief=brief(wp), rules=self.impl_rules)
+                    prompt = render(self.prompts["implement"], wp=wp, brief=brief(wp))
                 else:
                     attempt = self.fix_count.get(wp, 0) + 1
                     retry = ""
@@ -433,7 +298,7 @@ class Pipeline:
                                        previous=compact(previous),
                                        diff=f".claude/state/runs/{wp}.fix-{attempt - 1}.diff")
                     prompt = render(self.prompts["fix"], wp=wp, brief=brief(wp), defects=compact(defects_by_wp[wp]),
-                                    retry=retry, rules=self.impl_rules)
+                                    retry=retry)
                 opts = self.attempt_options(wp) if defects_by_wp else {}
                 return self.call(plan["agents"].get(wp) or "implementer", f"{wp} (fix)" if defects_by_wp else wp, prompt, wp,
                                  **opts)
@@ -468,7 +333,7 @@ class Pipeline:
             if fixing or wp in self.context_given or missing is None:
                 return None
             self.context_given.add(wp)
-            prompt = render(self.prompts["implement_full"], wp=wp, missing=missing, rules=self.impl_rules)
+            prompt = render(self.prompts["implement_full"], wp=wp, missing=missing, brief=brief(wp))
             return lambda: self.call(plan["agents"].get(wp) or "implementer", f"{wp} (context)", prompt, wp)
         thunks = {wp: again(wp, rep) for wp, rep in zip(wp_ids, reports) if rep and rep.get("status") == "NEEDS_CONTEXT"}
         pending = [(wp, th) for wp, th in thunks.items() if th]
@@ -497,6 +362,12 @@ class Pipeline:
             self.run["stages"].append({"stage": f"wave {wave} (fix)" if fixing else f"wave {wave}", "ok": good,
                                        "check": close["output"]})
             self.add_gate_denials(close["output"])
+            repaired = False
+            if not good and not fixing:
+                out = self.repair_acceptance(wave, by_wave[wave], close["output"])
+                if out and out.get("stopped"):
+                    return out
+                repaired = good = bool(out)
             if not good:
                 return {"stopped": self.stop(f"fix wave {wave}" if fixing else f"wave {wave}",
                                              "the fix ended with blockers or writes outside ownership" if fixing
@@ -506,9 +377,54 @@ class Pipeline:
             if last:
                 tail = self.seq(WAVE_TAIL, "verify")
                 return {"post": (tail and tail["steps"]) or []}
+            if repaired:  # the close that failed carried the next open-stage, which did not run
+                opened = False
+                continue
             if not self.ok(self.step(res, 1)):
                 return {"stopped": self.stop(f"wave {waves[i + 1]}", "the stage could not be opened")}
             opened = True
+
+    def repair_acceptance(self, wave, wp_ids, output):
+        """A wave blocked only by the acceptance tests, once per run: the test-author repairs them with the blockers,
+        then only the blocked packages run again. None when it does not apply; {"stopped"} or {"ok"} otherwise."""
+        reports = [self.run["work_packages"].get(wp) for wp in wp_ids]
+        blocked = acceptance_blocked(wp_ids, reports)
+        if self.repaired or not blocked or "OUTSIDE OWNERSHIP" in str(output or "") or not self.fits_repair(wave, blocked):
+            return None
+        self.repaired, where = True, f"wave {wave}"
+        open_ = self.step(self.seq_retry(["open-stage acceptance"], "open-stage acceptance"), 0)
+        if not self.ok(open_):
+            return {"stopped": self.stop(where, "the acceptance stage could not be reopened to repair the tests")}
+        blockers = [{"wp": wp, "missing": self.run["work_packages"][wp]["blocker"].get("missing")} for wp in blocked]
+        prompt = render(self.prompts["test_author_repair"], brief=brief("AT"), wave=wave, blockers=compact(blockers))
+        at = self.call("test-author", "test-author (repair)", prompt, "AT")
+        status = at.get("status") if at else None
+        state = "done" if status == "DONE" else "blocker"
+        close = self.step(self.close_seq([f"close-stage acceptance AT={state}"], "close-stage acceptance"), 0)
+        self.run["stages"].append({"stage": f"acceptance repair (wave {wave})", "ok": self.ok(close),
+                                   "check": close and close["output"]})
+        self.run["acceptance_repairs"].append({"wave": wave, "wps": blocked, "test_author": status})
+        if status != "DONE" or not self.ok(close):
+            return {"stopped": self.stop(where, "the test-author could not repair the acceptance tests")}
+        if not self.ok(self.step(self.seq_retry([f"open-stage {wave}"], f"open-stage {wave}"), 0)):
+            return {"stopped": self.stop(where, "the stage could not be opened")}
+        again = self.step(self.seq([self.launch_wave(wave, blocked, None)], f"close-stage {wave}"), 0)
+        if not again:
+            return {"stopped": self.stop(where, LOST)}
+        self.run["stages"].append({"stage": f"wave {wave} (after repair)", "ok": self.ok(again), "check": again["output"]})
+        self.add_gate_denials(again["output"])
+        if not self.ok(again):
+            return {"stopped": self.stop(where, "the wave ended with blockers, missing reports or writes outside ownership")}
+        return {"ok": True}
+
+    def fits_repair(self, wave, blocked):
+        """Whether the budget pays for the repair and the rest of the run, counted as budget_at_start counts it."""
+        most = self.plan.get("max_agent_calls")
+        if most is None:
+            return True
+        later = sum(len(ids) for w, ids in self.plan["work_packages"].items() if int(w) > int(wave))
+        needed = 1 + len(blocked) + later + len(AXES) + 1 + (1 if self.plan.get("docs") else 0)
+        return needed <= most - self.run["agent_calls"]
 
     def fix_cycle(self, defects, opened):
         short = self.budget_for_cycle(defects)

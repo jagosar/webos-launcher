@@ -18,7 +18,8 @@ from verification import install_quality_baseline  # noqa: E402
 
 # What `install` puts in another repo: the flow, without the flow's own tests.
 INSTALL_BIN = ("agentic core manifest_check repo_scan verification stage installer launch guardrail hook "
-               "quality compat waiting pipeline brief upgrade doctor plan_picture findings reports workflow_usage")
+               "quality compat waiting pipeline pipeline_parts brief upgrade doctor plan_picture findings reports "
+               "workflow_usage")
 INSTALL_GLOBS = [f".claude/bin/{name}.py" for name in INSTALL_BIN.split()] + [
     ".claude/agents/*.md",
     ".claude/commands/*.md",

@@ -12,18 +12,19 @@
     "advisor_model": null
   },
   "prompts": {
-    "implement": "Implement {wp}. Your brief is {brief}: the parts of architecture.md your package needs.{rules}",
-    "fix": "Fix {wp}. Your brief is {brief}. The code already exists. These are the defects the judges (reviewer, QA and verification) attribute to your package, as JSON:\n{defects}\nStay within the contract, do not touch other packages' files or the acceptance tests, and keep the acceptance tests of your criteria green. A defect in a file no package owns (for example, a caller your change broke) is fixed from your own files: keep that caller working with a compatible change, such as a default for a new parameter or a wrapper that keeps the old signature, unless section 6 explicitly forbids it. Return BLOCKED only when no compatible change exists in your files.{retry}{rules}",
+    "implement": "Implement {wp}. Your brief is {brief}: the parts of architecture.md your package needs. If your package is done and the acceptance tests themselves fail (an error inside a test or its doubles, not in your code), return BLOCKED with blocker.in \"acceptance\" and, in missing, each failing test, its file and its error.",
+    "fix": "Fix {wp}. Your brief is {brief}. The code already exists. These are the defects the judges (reviewer, QA and verification) attribute to your package, as JSON:\n{defects}\nStay within the contract, do not touch other packages' files or the acceptance tests, and keep the acceptance tests of your criteria green. A defect in a file no package owns (for example, a caller your change broke) is fixed from your own files: keep that caller working with a compatible change, such as a default for a new parameter or a wrapper that keeps the old signature, unless section 6 explicitly forbids it. Return BLOCKED only when no compatible change exists in your files. If your package is done and the acceptance tests themselves fail (an error inside a test or its doubles, not in your code), return BLOCKED with blocker.in \"acceptance\" and, in missing, each failing test, its file and its error.{retry}",
     "fix_retry": "\nThis is attempt {attempt} of {max}: the previous one did not fix it. The defects it was given:\n{previous}\nWhat it changed is in {diff}: read it first and do not repeat that approach. If you try something different, say in internal_decisions how it differs and why it should work.",
-    "test_author": "Write the acceptance tests. Your brief is {brief}: the parts of architecture.md they need.{rules}",
-    "test_author_revision": "Revise the acceptance tests (your brief is {brief}). An independent auditor found these weak points, as JSON:\n{weak}\nStrengthen them: the tests of each criterion must fail against an empty or trivial implementation (a stub that returns nothing, None or a constant) and must cover the criterion's \"must not\". Keep them red for the right reason.{rules}",
+    "test_author": "Write the acceptance tests. Your brief is {brief}: the parts of architecture.md they need.",
+    "test_author_revision": "Revise the acceptance tests (your brief is {brief}). An independent auditor found these weak points, as JSON:\n{weak}\nStrengthen them: the tests of each criterion must fail against an empty or trivial implementation (a stub that returns nothing, None or a constant) and must cover the criterion's \"must not\". Keep them red for the right reason.",
+    "test_author_repair": "Repair the acceptance tests (your brief is {brief}). The code of wave {wave} is written, and these packages could not finish because the acceptance tests themselves fail, as JSON:\n{blockers}\nFix the tests or their doubles in your zone so that they test what the criteria say. Do not weaken what a criterion checks and do not touch production code. Run the acceptance command before you report.",
     "test_auditor": "Audit the acceptance tests against the brief they were written from, {brief}. The test-author reports this coverage, as JSON:\n{coverage}",
     "reviewer": "Review the integrated code according to architecture.md.{callers}{concerns}",
     "verifier": "Try to refute this finding from the reviewer, as JSON:\n{finding}",
     "qa": "Run the system's QA validation according to architecture.md.{rules}",
     "qa_recheck": "Re-check the system after a fix, according to architecture.md. Packages fixed since your last pass: {wps}. The fixes' diffs are {diffs}: read them and the code they changed. Your last report listed these defects, as JSON:\n{defects}\nRun the tests in your zone and the full suite again, and add tests only for what the diffs changed. Report every defect that is still open, from that list or new, with the same fields; leave out the ones the fix closed. Do not repeat the rest of your first pass.{rules}",
     "doc_updater": "Update the documentation according to architecture.md and the integrated code.",
-    "implement_full": "Implement {wp}. Your first attempt returned NEEDS_CONTEXT: {missing}. This time your brief is architecture.md, whole: read it and implement. If the document does not settle it, return BLOCKED with the section that should.{rules}",
+    "implement_full": "Implement {wp}. Your first attempt returned NEEDS_CONTEXT: {missing}. This time your brief is architecture.md, whole: read it and implement. The rules you must follow are at the end of {brief}. If the document does not settle it, return BLOCKED with the section that should.",
     "standards_reviewer": "Review the integrated code against section 7 of architecture.md and the rules below. Report only breaches of a written rule: name it in \"rule\".{rules}",
     "re_review": "Re-review the fix, on the {axis} axis only. These findings were confirmed before the fix, each with its fingerprint, as JSON:\n{findings}\nThe fix's diffs are {diffs}: read them and the code they changed. For each fingerprint say ADDRESSED or NOT_ADDRESSED, with the line that shows it. A finding with a \"scope\" is judged only in those files: what its evidence says about other files is another package's finding. Report anything new in new_findings: it is recorded and does not block this run.{rules}"
   },
@@ -245,6 +246,13 @@
               "items": {
                 "type": "string"
               }
+            },
+            "in": {
+              "type": "string",
+              "enum": [
+                "design",
+                "acceptance"
+              ]
             }
           }
         },

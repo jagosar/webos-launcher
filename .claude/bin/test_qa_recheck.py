@@ -125,9 +125,12 @@ class RulesTests(unittest.TestCase):
         for label in ("reviewer (re-review)", "standards-reviewer (re-review)", "qa (re-check)", "doc-updater",
                       "test-auditor"):
             self.assertIn(label, labels)
-        for agent in ("implementer", "test-author", "standards-reviewer", "qa"):
+        for agent in ("standards-reviewer", "qa"):
             prompts = [p for _, p, _ in calls_of(state, agent)]
             self.assertTrue(prompts and all("RULE-TEXT" in p for p in prompts), agent)
+        for agent in ("implementer", "test-author"):  # the writers read the rules at the end of their brief
+            prompts = [p for _, p, _ in calls_of(state, agent)]
+            self.assertTrue(prompts and not any("RULE-TEXT" in p for p in prompts), agent)
         for agent in ("test-auditor", "reviewer", "doc-updater", "verifier"):
             prompts = [p for _, p, _ in calls_of(state, agent)]
             self.assertTrue(prompts, agent)
@@ -165,8 +168,9 @@ class DefinitionTests(unittest.TestCase):
         self.assertNotIn("Create it if it is in your zone", docs)
         self.assertIn("only if it is in your zone", docs)
         self.assertIn("qa_passes", self.read("commands/implement.md"))
-        for name in ("qa.md", "implementer.md", "test-author.md"):
-            self.assertIn("the rules printed in your prompt", self.read("agents/" + name), name)
+        self.assertIn("the rules printed in your prompt", self.read("agents/qa.md"))
+        for name in ("implementer.md", "test-author.md"):  # the writers read them at the end of their brief (0032)
+            self.assertIn("the rules at the end of your brief", self.read("agents/" + name), name)
 
 
 if __name__ == "__main__":

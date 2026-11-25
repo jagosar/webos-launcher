@@ -227,9 +227,12 @@ class NativeRulesTests(unittest.TestCase):
                 subprocess.run(["git", "add", "-A"], cwd=project.repo.dir, check=True)
                 subprocess.run([*git, "commit", "-qm", "init"], cwd=project.repo.dir, check=True)
                 prompt = self.first_implementer_prompt(project, logs, command)
-                self.assertIn(COMMON_RULE, prompt)
-                self.assertIn(PRINTED.strip(), prompt)
-                self.assertNotIn("already in your context", prompt)
+                # the rules travel, whole, at the end of the brief (design 0032); the prompt names the brief
+                brief = (project.repo.dir / ".claude/state/briefs/WP-01.md").read_text(encoding="utf-8")
+                self.assertIn(COMMON_RULE, brief)
+                self.assertIn(PRINTED.strip(), brief)
+                self.assertNotIn("already in your context", brief)
+                self.assertNotIn(PRINTED.strip(), prompt)
 
 
 class DefinitionTests(unittest.TestCase):
