@@ -226,7 +226,9 @@ class ReviewAxesLaunchTests(LauncherCase):
         self.assertEqual(plan["rules_sum"], findings.text_sum(text))
         repo.env.update(self.repo.env, CLAUDE_PROJECT_DIR=str(repo.dir))
         self.assertEqual(repo.run("run-wave", "1").returncode, 0)
-        self.assertIn(RULE, self.calls("WP-01")[-1]["prompt"])
+        # the implementer reads the rules at the end of its brief (design 0032), not in its prompt
+        self.assertNotIn(RULE, self.calls("WP-01")[-1]["prompt"])
+        self.assertIn(RULE, (repo.dir / ".claude/state/briefs/WP-01.md").read_text(encoding="utf-8"))
         self.assertEqual(json.loads(self.repo.run("pipeline-plan").stdout.splitlines()[-1])["rules_text"], "")
 
     def test_run_review_starts_both_reviewers(self):

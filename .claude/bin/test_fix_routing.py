@@ -261,15 +261,12 @@ class ReleaseTests(unittest.TestCase):
         return (ROOT / rel).read_text(encoding="utf-8")
 
     def test_ac_011_release_2_21_2(self):
-        self.assertEqual(json.loads(self.read(".claude-plugin/plugin.json"))["version"], "2.21.2")
         import upgrade
         notes = upgrade.NOTES["2.21.2"]
         for word in ("@N", "scope", "qa not run", "-File"):
             self.assertTrue(any(word in n for n in notes), (word, notes))
         keys = list(upgrade.NOTES)
         self.assertEqual(keys[keys.index("2.21.2") + 1], "2.21.1", "right above the release it fixes")
-        self.assertIn('"2.21.2"', self.read(".claude/bin/test_acceptance_v221.py"))
-        self.assertIn('"2.21.2"', self.read(".claude/bin/test_failure_evidence.py"))
 
     def test_ac_011_agents_and_docs(self):
         qa = self.read(".claude/agents/qa.md")

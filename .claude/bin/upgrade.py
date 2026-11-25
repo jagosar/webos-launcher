@@ -153,6 +153,14 @@ NOTES = {
         "A workflow-subagent (the type the Workflow tool's subagents may carry; not verified) cannot write files "
         "before it claims its zone. Bash stays open, so a gatekeeper with that type keeps working.",
     ],
+    "2.22.0": [
+        "The implementer and the test-author read the language rules and the quality limits, whole, at the end of "
+        "their brief: `agentic.py briefs` writes them from disk. In the workflow their prompts no longer carry the "
+        "rules, which reached them only as paths whenever the gatekeeper's copy of the plan was not exact.",
+        "An implementer whose package is done but whose acceptance tests themselves fail reports BLOCKED with "
+        "`blocker.in: \"acceptance\"`. The flow then has the test-author repair the tests and relaunches only the "
+        "blocked packages, once per run and within the budget; the result records it in `acceptance_repairs`.",
+    ],
     "2.21.2": [
         "A fix's diff is named by the attempt number in the run: the engines close a fix wave with `ID=state@N`, "
         "so an agent never reads a diff an earlier run left, and an attempt whose diff cannot be computed leaves a "

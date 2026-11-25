@@ -643,8 +643,9 @@ class ReviewDefinitionTests(unittest.TestCase):
             self.assertIn(phrase, implement)
 
     def test_writers_follow_the_printed_rules_and_fix_attempts_read_the_last_diff(self):
-        for name in ("implementer.md", "test-author.md", "qa.md"):
-            self.assertIn("the rules printed in your prompt", self.read("agents/" + name), name)
+        self.assertIn("the rules printed in your prompt", self.read("agents/qa.md"))
+        for name in ("implementer.md", "test-author.md"):  # the writers read them at the end of their brief (0032)
+            self.assertIn("the rules at the end of your brief", self.read("agents/" + name), name)
         for path in sorted(AGENTS_DIR.glob("*.md")):
             self.assertNotIn("the rules your prompt points to", path.read_text(encoding="utf-8"), path.name)
         self.assertIn("continue your earlier session or start fresh", self.read("agents/implementer.md"))

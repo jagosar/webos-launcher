@@ -2029,6 +2029,263 @@
           "needs_validation": []
         }
       ]
+    },
+    {
+      "name": "a wave blocked by the acceptance tests is repaired and resumed",
+      "reports": {
+        "implementer": {
+          "WP-02": [
+            {
+              "status": "BLOCKED",
+              "blocker": {
+                "missing": "test_ac_002 dies in its double: argument types do not match",
+                "section": "8",
+                "in": "acceptance"
+              }
+            },
+            {}
+          ]
+        }
+      },
+      "gate_fail": [
+        {
+          "prefix": "close-stage 1 WP-01=done WP-02=blocker",
+          "exit_code": 3,
+          "output": "WP-01: 1 file(s) changed: src/a.py\nWP-02: 0 file(s) changed\nRESULT: REVIEW"
+        }
+      ]
+    },
+    {
+      "name": "a design blocker beside an acceptance blocker stops as before",
+      "reports": {
+        "implementer": {
+          "WP-01": [
+            {
+              "status": "BLOCKED",
+              "blocker": {
+                "missing": "section 6 has no signature for total()",
+                "section": "6"
+              }
+            }
+          ],
+          "WP-02": [
+            {
+              "status": "BLOCKED",
+              "blocker": {
+                "missing": "test_ac_002 dies in its double: argument types do not match",
+                "section": "8",
+                "in": "acceptance"
+              }
+            },
+            {}
+          ]
+        }
+      },
+      "gate_fail": [
+        {
+          "prefix": "close-stage 1 ",
+          "exit_code": 3,
+          "output": "RESULT: REVIEW"
+        }
+      ]
+    },
+    {
+      "name": "writes outside ownership are never repaired",
+      "reports": {
+        "implementer": {
+          "WP-02": [
+            {
+              "status": "BLOCKED",
+              "blocker": {
+                "missing": "test_ac_002 dies in its double: argument types do not match",
+                "section": "8",
+                "in": "acceptance"
+              }
+            },
+            {}
+          ]
+        }
+      },
+      "gate_fail": [
+        {
+          "prefix": "close-stage 1 WP-01=done WP-02=blocker",
+          "exit_code": 3,
+          "output": "WP-02: 1 file(s) changed: acceptance/test_x.py\nOUTSIDE OWNERSHIP (no owner of this stage owns these files):\n  acceptance/test_x.py\nRESULT: REVIEW"
+        }
+      ]
+    },
+    {
+      "name": "the acceptance repair runs once per run",
+      "reports": {
+        "implementer": {
+          "WP-02": [
+            {
+              "status": "BLOCKED",
+              "blocker": {
+                "missing": "test_ac_002 dies in its double: argument types do not match",
+                "section": "8",
+                "in": "acceptance"
+              }
+            },
+            {}
+          ],
+          "WP-03": [
+            {
+              "status": "BLOCKED",
+              "blocker": {
+                "missing": "test_ac_003 dies in its double",
+                "section": "8",
+                "in": "acceptance"
+              }
+            }
+          ]
+        }
+      },
+      "gate_fail": [
+        {
+          "prefix": "close-stage 1 WP-01=done WP-02=blocker",
+          "exit_code": 3,
+          "output": "WP-01: 1 file(s) changed: src/a.py\nWP-02: 0 file(s) changed\nRESULT: REVIEW"
+        },
+        {
+          "prefix": "close-stage 2 WP-03=blocker",
+          "exit_code": 3,
+          "output": "RESULT: REVIEW"
+        }
+      ]
+    },
+    {
+      "name": "a test-author that cannot repair stops the run",
+      "reports": {
+        "implementer": {
+          "WP-02": [
+            {
+              "status": "BLOCKED",
+              "blocker": {
+                "missing": "test_ac_002 dies in its double: argument types do not match",
+                "section": "8",
+                "in": "acceptance"
+              }
+            },
+            {}
+          ]
+        }
+      },
+      "gate_fail": [
+        {
+          "prefix": "close-stage 1 WP-01=done WP-02=blocker",
+          "exit_code": 3,
+          "output": "WP-01: 1 file(s) changed: src/a.py\nWP-02: 0 file(s) changed\nRESULT: REVIEW"
+        }
+      ],
+      "test_author": [
+        {
+          "status": "DONE",
+          "coverage": [
+            {
+              "ac": "AC-001",
+              "tests": [
+                "test_ac_001"
+              ]
+            }
+          ],
+          "blocker": null
+        },
+        {
+          "status": "BLOCKER",
+          "coverage": [],
+          "blocker": "the double cannot be built on PowerShell 5.1 without the code"
+        }
+      ]
+    },
+    {
+      "name": "a repair that does not fit the budget stops as before",
+      "reports": {
+        "implementer": {
+          "WP-02": [
+            {
+              "status": "BLOCKED",
+              "blocker": {
+                "missing": "test_ac_002 dies in its double: argument types do not match",
+                "section": "8",
+                "in": "acceptance"
+              }
+            },
+            {}
+          ]
+        }
+      },
+      "gate_fail": [
+        {
+          "prefix": "close-stage 1 WP-01=done WP-02=blocker",
+          "exit_code": 3,
+          "output": "WP-01: 1 file(s) changed: src/a.py\nWP-02: 0 file(s) changed\nRESULT: REVIEW"
+        }
+      ],
+      "plan": {
+        "max_agent_calls": 9
+      }
+    },
+    {
+      "name": "a fix wave blocked by the acceptance tests is not repaired",
+      "verify": [
+        {
+          "exit_code": 3,
+          "output": {
+            "ok": false,
+            "blocking": [
+              "tests"
+            ],
+            "preexisting_failures": [],
+            "suspects": {
+              "WP-02": {
+                "phases": [
+                  "tests"
+                ],
+                "files": [
+                  "src/b/x.py"
+                ],
+                "acs": [
+                  "AC-002"
+                ]
+              }
+            },
+            "phases": [
+              {
+                "name": "tests",
+                "passed": false,
+                "status": "fails",
+                "tail": [
+                  "FAILED src/b/x.py test_ac_002"
+                ]
+              }
+            ]
+          }
+        },
+        null
+      ],
+      "reports": {
+        "implementer": {
+          "WP-02": [
+            {},
+            {
+              "status": "BLOCKED",
+              "blocker": {
+                "missing": "test_ac_002 dies in its double: argument types do not match",
+                "section": "8",
+                "in": "acceptance"
+              }
+            }
+          ]
+        }
+      },
+      "gate_fail": [
+        {
+          "prefix": "close-stage 1 WP-02=blocker",
+          "exit_code": 3,
+          "output": "RESULT: REVIEW"
+        }
+      ]
     }
   ]
 }

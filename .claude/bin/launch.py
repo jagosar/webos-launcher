@@ -26,7 +26,7 @@ from core import (  # noqa: E402
 )
 from stage import check_stage, snapshot, stage_owners  # noqa: E402
 from verification import quality_limits_text  # noqa: E402
-from repo_scan import injected_by_claude_code, rule_files, rules_text  # noqa: E402
+from repo_scan import injected_by_claude_code, render_rules, rule_files, rules_text  # noqa: E402
 from findings import blocks, text_sum, waiver_for  # noqa: E402
 
 TYPE_RE = re.compile(r"^(?:Type|Tipo):\s*(feature|change|fix|refactor)\b", re.M | re.I)
@@ -272,9 +272,16 @@ def write_briefs(manifest):
     info = {}
     for ident in [*wps(manifest), *(["AT"] if manifest.get("acceptance") else [])]:
         body, sliced = brief.slice_architecture(text, ident, manifest)
-        (STATE / "briefs" / f"{ident}.md").write_text(body, encoding="utf-8")
+        (STATE / "briefs" / f"{ident}.md").write_text(body + brief_rules(manifest, ident), encoding="utf-8")
         info[ident] = {"path": f".claude/state/briefs/{ident}.md", "sliced": sliced, "words": len(body.split())}
     return info
+
+def brief_rules(manifest, ident):
+    """The rules a brief ends with: the installed rules, whole, and the quality limits. A brief is read from disk, so
+    nothing relays them (design 0032). "" for a package when the spec keeps the rules away from implementers."""
+    if ident != "AT" and load_spec()["constants"].get("implementer_rules") is False:
+        return ""
+    return render_rules(rule_files(manifest), ROOT) + quality_limits_text()
 
 def run_stage(manifest, label, jobs, expected):
     """A one-off stage: snapshot, the agents of `jobs` ([(id, agent type, prompt[, entity])]) in parallel, ownership

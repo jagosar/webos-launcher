@@ -221,8 +221,6 @@ class ZoneRecordTests(EngineCase):
 @FLOW_REPO_ONLY  # it reads this repository's docs and release files
 class ReleaseTests(unittest.TestCase):
     def test_ac_008_release_2_21_1(self):
-        plugin = json.loads((ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
-        self.assertEqual(plugin["version"], "2.21.2")
         import upgrade
         notes = upgrade.NOTES["2.21.1"]
         for word in ("Describing", "failing_lines", "gate_denials"):
@@ -238,7 +236,6 @@ class ReleaseTests(unittest.TestCase):
         line = next(line for line in implement.splitlines() if "`gate_denials`" in line)
         self.assertIn("`AT`", line)
         self.assertIn("`QA`", line)
-        self.assertIn('"2.21.2"', (BIN / "test_acceptance_v221.py").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

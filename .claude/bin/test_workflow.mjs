@@ -25,6 +25,7 @@ async function simulate(scenario = {}, args = {}) {
   let qaRound = 0
   let auditRound = 0
   const implCalls = {}
+  let authorCalls = 0
   const reReviewRounds = {}
   const respond = cmd => {
     executed.push(cmd)
@@ -65,8 +66,14 @@ async function simulate(scenario = {}, args = {}) {
         const failed = steps.find(x => x.exit_code !== 0)
         return { exit_code: failed ? failed.exit_code : 0, output: JSON.stringify({ ok: !failed, steps }) }
       }
-      case 'test-author':
-        return scenario.testAuthor || { status: 'DONE', coverage: [{ ac: 'AC-001', tests: ['test_ac_001'] }], blocker: null }
+      case 'test-author': {
+        let answer = scenario.testAuthor
+        if (Array.isArray(answer)) {  // one answer per call: the first, then the last
+          authorCalls += 1
+          answer = pickRound(answer, authorCalls)
+        }
+        return answer || { status: 'DONE', coverage: [{ ac: 'AC-001', tests: ['test_ac_001'] }], blocker: null }
+      }
       case 'test-auditor':
         auditRound += 1
         return scenario.audit ? scenario.audit(auditRound) : { status: 'PASS', findings: [] }
@@ -314,12 +321,16 @@ test('absolute paths in the doc-updater report: count as changed', async () => {
   assert.ok(!result.pending.some(x => (x.problem || '').includes('not on disk')))
 })
 
-test('language rules: reach the agents that write code or judge it by them', async () => {
+test('language rules: the judges get them in the prompt, the writers at the end of their brief', async () => {
   const rules = ['.claude/rules/agentic/common.md', '.claude/rules/agentic/python.md']
   const { calls } = await simulate({ plan: { ...DOCS_PLAN, rules } })
-  for (const type of ['test-author', 'implementer', 'standards-reviewer', 'qa']) {
+  for (const type of ['standards-reviewer', 'qa']) {
     const call = calls.find(c => c.type === type)
     assert.ok(call.prompt.includes(rules.join(', ')), `${type} does not receive the rules`)
+  }
+  for (const type of ['test-author', 'implementer']) {
+    const call = calls.find(c => c.type === type)
+    assert.ok(!call.prompt.includes('Rules') && call.prompt.includes('.claude/state/briefs/'), `${type}: rules in the brief`)
   }
   // Their definitions say they do not judge by the rules: the Spec reviewer leaves them to the other axis.
   for (const type of ['test-auditor', 'reviewer', 'doc-updater']) {
@@ -572,6 +583,7 @@ const summarize = ({ result, calls, gates, gateCalls }) => {
     review_axes: reviewAxes(result.review), rules: result.rules ?? null,
     agent_calls: result.agent_calls, models: models.sort(), re_review: reReviewCounts(result.review),
     qa_passes: (result.qa_passes || []).map(p => p.mode),
+    acceptance_repairs: result.acceptance_repairs || [],
     environment_retries: (result.environment_retries || []).map(r => ({ cmd: r.cmd, exit_code: r.exit_code })),
     untested: (result.pending || []).filter(p => p.kind === 'tests not run').map(p => ({ wp: p.wp, claim: p.claim, fact: p.fact })),
   }

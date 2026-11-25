@@ -8,7 +8,6 @@ Everything runs in temporary repos with a real quality baseline. Nothing is spen
 import json
 import shutil
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,7 +17,7 @@ CLAUDE = ROOT / ".claude"
 sys.path.insert(0, str(BIN))
 import core  # noqa: E402
 import verification  # noqa: E402
-from test_agentic import MANIFEST, PY, Repo, testutil  # noqa: E402
+from test_agentic import MANIFEST, PY, Repo  # noqa: E402
 
 FLOW_REPO_ONLY = unittest.skipUnless(core.is_flow_repo(ROOT), "the flow's own repo")
 ONE_PACKAGE = {"allow_bash": [], "acceptance": {"files": ["acceptance/"], "command": f"{PY} acc.py"},
@@ -33,12 +32,6 @@ def limits_sentence(line_chars=120):
     return (f"\nQuality limits, checked on every file you write, tests included: no line over {line_chars} "
             "characters; no new file over 800 lines; no new function over 60 lines (100 in a test) or nested deeper "
             "than 4. What is already over a limit has its own allowance in .claude/quality-baseline.json.\n")
-
-
-def temp_dir(test, prefix):
-    d = Path(tempfile.mkdtemp(prefix=prefix))
-    test.addCleanup(shutil.rmtree, d, ignore_errors=True)
-    return d
 
 
 class VerifyCase(unittest.TestCase):
@@ -115,13 +108,11 @@ class LimitsInThePromptTests(unittest.TestCase):
     def plan(self, repo):
         return json.loads(repo.run("pipeline-plan").stdout.splitlines()[-1])
 
-    def implementer_prompt(self, repo):
-        logs, bindir = temp_dir(self, "limits-logs-"), temp_dir(self, "limits-claude-")
-        env = {"AGENTIC_CLAUDE": testutil.install_fake_claude(bindir), "FAKE_LOG_DIR": str(logs)}
-        r = repo.run("run-wave", "1", "WP-01", env=env)
-        calls = testutil.fake_calls(logs, "WP-01")
-        self.assertTrue(calls, r.stdout + r.stderr)
-        return calls[-1]["prompt"]
+    def implementer_brief(self, repo):
+        """The implementer reads the rules and the limits at the end of its brief (design 0032), not in its prompt."""
+        r = repo.run("briefs")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return (repo.dir / ".claude/state/briefs/WP-01.md").read_text(encoding="utf-8")
 
     def test_ac_004_the_limits_are_printed_where_the_rules_are(self):
         import findings
@@ -132,11 +123,11 @@ class LimitsInThePromptTests(unittest.TestCase):
         self.assertEqual(text.count("Quality limits"), 1)
         self.assertLess(text.index("--- .claude/rules/agentic/common.md ---"), text.index("Quality limits"))
         self.assertEqual(plan["rules_sum"], findings.text_sum(text))
-        prompt = self.implementer_prompt(repo)
-        self.assertTrue(prompt.endswith(limits_sentence(100)), prompt[-400:])
+        brief = self.implementer_brief(repo)
+        self.assertTrue(brief.endswith(limits_sentence(100)), brief[-400:])
         (repo.dir / BASELINE).unlink()
         self.assertNotIn("Quality limits", self.plan(repo)["rules_text"])
-        self.assertNotIn("Quality limits", self.implementer_prompt(repo))
+        self.assertNotIn("Quality limits", self.implementer_brief(repo))
 
     def test_ac_004_the_defaults_are_printed_and_a_broken_baseline_prints_nothing(self):
         repo = self.project()

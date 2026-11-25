@@ -100,7 +100,11 @@ def world(decl):
         if opts.get("schema") == "re-review":
             return re_review(decl, state, agent_type, prompt)
         if agent_type == "test-author":
-            return decl.get("test_author") or {"status": "DONE", "coverage": [{"ac": "AC-001", "tests": ["test_ac_001"]}], "blocker": None}
+            answer = decl.get("test_author")
+            if isinstance(answer, list):  # one answer per call: the first, then the last
+                state["authors"] = state.get("authors", 0) + 1
+                answer = pick(answer, state["authors"])
+            return answer or {"status": "DONE", "coverage": [{"ac": "AC-001", "tests": ["test_ac_001"]}], "blocker": None}
         if agent_type == "test-auditor":
             state["audits"] += 1
             return pick(decl["audit"], state["audits"]) if decl.get("audit") else {"status": "PASS", "findings": []}
@@ -171,6 +175,7 @@ def summarize(result, state):
             "verification_failures": len(result.get("verification_failures") or []),
             "agent_calls": result.get("agent_calls"), "models": sorted(models), "re_review": re_review_counts(result),
             "qa_passes": [p["mode"] for p in result.get("qa_passes") or []],
+            "acceptance_repairs": result.get("acceptance_repairs") or [],
             "environment_retries": [{"cmd": r["cmd"], "exit_code": r["exit_code"]}
                                     for r in result.get("environment_retries") or []],
             "untested": [{"wp": p["wp"], "claim": p["claim"], "fact": p["fact"]} for p in result.get("pending", [])
@@ -220,7 +225,7 @@ class ConformanceTests(unittest.TestCase):
                 mine, theirs = run_scenario(decl), self.workflow[decl["name"]]
                 keys = ("result", "failed_stage", "detail", "fix_cycles", "pending", "gates", "gate_calls", "agents",
                         "not_checked", "gate_denials", "review_callers", "verification_failures", "review_axes", "rules",
-                        "agent_calls", "models", "re_review", "qa_passes")
+                        "agent_calls", "models", "re_review", "qa_passes", "acceptance_repairs")
                 for key in keys:
                     self.assertEqual(mine[key], theirs[key], key)
                 self.assertEqual(mine["prompts"], theirs["prompts"], "the agents must receive the same prompts")
@@ -320,6 +325,17 @@ class EngineTests(unittest.TestCase):
         f.write_text("not json", encoding="utf-8")
         self.assertIsNone(agentic.structured_report(f, schema))
         self.assertIsNone(agentic.structured_report(tmp / "missing.json", schema))
+
+    def test_only_a_wave_blocked_by_the_acceptance_tests_alone_is_repaired(self):
+        acc = {"status": "BLOCKED", "blocker": {"missing": "m", "section": "8", "in": "acceptance"}}
+        done, concerns = {"status": "DONE"}, {"status": "DONE_WITH_CONCERNS"}
+        blocked = pipeline.acceptance_blocked
+        self.assertEqual(blocked(["WP-02", "WP-01"], [acc, concerns]), ["WP-02"])
+        self.assertEqual(blocked(["WP-02", "WP-01"], [acc, acc]), ["WP-01", "WP-02"])
+        for other in (None, {"status": "NEEDS_CONTEXT"}, {"status": "BLOCKED", "blocker": {"missing": "m"}}):
+            self.assertEqual(blocked(["WP-01", "WP-02"], [other, acc]), [], other)
+        self.assertEqual(blocked(["WP-01"], [{"status": "BLOCKED", "blocker": "acceptance"}]), [])
+        self.assertEqual(blocked(["WP-01"], [done]), [])
 
     def test_a_fix_reads_the_failing_lines_and_the_record_keeps_the_zones(self):
         by_name = {d["name"]: d for d in CONFORMANCE["scenarios"]}
@@ -470,18 +486,19 @@ class ReviewAxesTests(unittest.TestCase):
     def test_printed_rules_reach_the_writers_and_judges_only(self):
         printed = by_name("printed rules reach the agents")
         self.assertEqual(printed["rules"], "printed")
-        for agent in ("implementer", "test-author", "standards-reviewer", "qa"):
+        for agent in ("standards-reviewer", "qa"):
             self.assertTrue(all("RULE-TEXT" in p for p in prompts_of(printed, agent)), agent)
+        for agent in ("implementer", "test-author"):  # the writers read the rules at the end of their brief
+            self.assertFalse([p for p in prompts_of(printed, agent) if "RULE-TEXT" in p or "Rules you must" in p])
         for agent in ("test-auditor", "reviewer", "doc-updater"):
             self.assertTrue(prompts_of(printed, agent), agent)
         for agent in ("gatekeeper", "verifier", "test-auditor", "reviewer", "doc-updater"):
             self.assertFalse([p for p in prompts_of(printed, agent) if "RULE-TEXT" in p or "Rules you must" in p])
         damaged = by_name("rules text that arrives damaged falls back to the paths")
         self.assertEqual(damaged["rules"], "pointed")
-        for agent in ("implementer", "standards-reviewer"):
-            for p in prompts_of(damaged, agent):
-                self.assertIn("Rules you must follow (language and common): .claude/rules/agentic/common.md", p)
-                self.assertNotIn("RULE-TEXT", p)
+        for p in prompts_of(damaged, "standards-reviewer"):
+            self.assertIn("Rules you must follow (language and common): .claude/rules/agentic/common.md", p)
+            self.assertNotIn("RULE-TEXT", p)
         bare = by_name("the implementer can be left without the rules")
         self.assertTrue(prompts_of(bare, "implementer"))
         self.assertFalse([p for p in prompts_of(bare, "implementer") if "RULE-TEXT" in p])

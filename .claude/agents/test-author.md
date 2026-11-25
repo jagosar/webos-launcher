@@ -28,7 +28,7 @@ You write the acceptance tests **before** anyone implements anything. You are th
 
 0. First action, always: `python3 .claude/bin/agentic.py claim AT`.
 1. Read your brief (named in your prompt): the stack, contracts, criteria and test strategy the tests come from. Open `architecture.md` only if the brief points to something it lacks.
-2. Write the tests in your zone, following the conventions of section 7 and the tests part of the rules printed in your prompt (if it names files instead, read them).
+2. Write the tests in your zone, following the conventions of section 7 and the tests part of the rules at the end of your brief, the language's known traps included.
 3. Run the acceptance command (the manifest's `acceptance.command`) and check that everything is red for the right reason.
 
 # Report (final answer, under 300 words)

@@ -45,7 +45,8 @@ const REPORT_SCHEMA = obj(['status', 'wp', 'files', 'checks', 'internal_decision
   files: { type: 'array', items: { type: 'string' } },
   checks: { type: 'array', items: { type: 'object', required: ['command', 'passed'], properties: { command: { type: 'string' }, passed: { type: 'boolean' }, detail: { type: 'string' } } } },
   internal_decisions: { type: 'array', items: { type: 'string' } },
-  blocker: { type: ['object', 'null'], required: ['missing', 'section'], properties: { missing: { type: 'string' }, section: { type: 'string' }, options: { type: 'array', items: { type: 'string' } } } },
+  blocker: { type: ['object', 'null'], required: ['missing', 'section'], properties: { missing: { type: 'string' }, section: { type: 'string' }, options: { type: 'array', items: { type: 'string' } },
+    in: { type: 'string', enum: ['design', 'acceptance'] } } },
   not_checked: NOT_CHECKED,
   concerns: { type: 'array', items: { type: 'string' } },
   missing_context: { type: ['object', 'null'], required: ['what', 'section'], properties: { what: { type: 'string' }, section: { type: 'string' } } },
@@ -229,6 +230,10 @@ const qaNotRunItems = qa => {
 }
 // Each agent reads the slice of architecture.md that `agentic.py briefs` wrote for it, not the whole document.
 const brief = id => `.claude/state/briefs/${id}.md`
+// The writers' prompts carry no rules (they end their brief); this sentence asks for an acceptance repair.
+const ACCEPTANCE_BLOCKER = ' If your package is done and the acceptance tests themselves fail (an error inside a test or ' +
+  'its doubles, not in your code), return BLOCKED with blocker.in "acceptance" and, in missing, each failing test, ' +
+  'its file and its error.'
 const REFUTE_CONFIDENCE = 0.7
 // verify and baseline run the whole suite: each goes in a gatekeeper call of its own, so it fits in one Bash timeout.
 const WAVE_TAIL = ['verify', 'open-stage review', 'callers']
@@ -246,7 +251,7 @@ const unchangedClaims = (report, out, id) => {
     ? report.files.filter(f => !seen.some(s => f === s || f.endsWith('/' + s)))
     : []
 }
-const run = { result: 'REVIEW', stages: [], baseline: null, work_packages: {}, verification: null, review: null, qa: null, test_audit: null, docs: null, fix_cycles: 0, pending: [], not_checked: [], gate_denials: {}, verification_failures: [], agent_calls: 0, environment_retries: [], qa_passes: [] }
+const run = { result: 'REVIEW', stages: [], baseline: null, work_packages: {}, verification: null, review: null, qa: null, test_audit: null, docs: null, fix_cycles: 0, pending: [], not_checked: [], gate_denials: {}, verification_failures: [], agent_calls: 0, environment_retries: [], qa_passes: [], acceptance_repairs: [] }
 // Keeps each report's not_checked per call; passes `model` only when set (escalation); counts every call, failed too.
 const report = async (prompt, opts) => {
   const { model, ...rest } = opts
@@ -260,6 +265,7 @@ const needsItem = (source, i) => ({ type: 'needs validation', source, wp: i.wp, 
 let needsReview = []  // the last review's needs-validation items
 const concernPending = []  // DONE_WITH_CONCERNS doubts, kept across cycles and handed to every review
 const contextGiven = new Set()  // packages already re-dispatched once with the whole document
+let repaired = false  // the acceptance repair runs once per run (design 0032)
 // A pending item for a DONE_WITH_CONCERNS doubt: no severity, so it never blocks; the reviewer weighs it.
 const concernItem = (wp, text) => ({ type: 'concern', source: wp, wp, problem: text })
 // Each check the implementer could not run (passed false, detail "not run: ..."): a needs-validation item, no blocker.
@@ -385,11 +391,12 @@ async function documentStage(steps) {
 // Runs one wave's agents (fixers when defectsByWp is given) in its open stage; the caller closes it with what follows.
 async function launchWave(wave, wpIds, defectsByWp) {
   const reports = await parallel(wpIds.map(wp => () => {
-    let prompt = `Implement ${wp}. Your brief is ${brief(wp)}: the parts of architecture.md your package needs.`
+    let prompt = `Implement ${wp}. Your brief is ${brief(wp)}: the parts of architecture.md your package needs.` +
+      ACCEPTANCE_BLOCKER
     if (defectsByWp) {
       const attempt = (fixCount[wp] || 0) + 1
       prompt = `Fix ${wp}. Your brief is ${brief(wp)}. The code already exists. These are the defects the judges (reviewer, QA and verification) attribute to your package, as JSON:\n` +
-        `${JSON.stringify(defectsByWp[wp])}\nStay within the contract, do not touch other packages' files or the acceptance tests, and keep the acceptance tests of your criteria green. A defect in a file no package owns (for example, a caller your change broke) is fixed from your own files: keep that caller working with a compatible change, such as a default for a new parameter or a wrapper that keeps the old signature, unless section 6 explicitly forbids it. Return BLOCKED only when no compatible change exists in your files.`
+        `${JSON.stringify(defectsByWp[wp])}\nStay within the contract, do not touch other packages' files or the acceptance tests, and keep the acceptance tests of your criteria green. A defect in a file no package owns (for example, a caller your change broke) is fixed from your own files: keep that caller working with a compatible change, such as a default for a new parameter or a wrapper that keeps the old signature, unless section 6 explicitly forbids it. Return BLOCKED only when no compatible change exists in your files.` + ACCEPTANCE_BLOCKER
       if (attempt > 1) {
         prompt += `\nThis is attempt ${attempt} of ${plan.max_fix_cycles}: the previous one did not fix it. The defects it was given:\n${JSON.stringify((fixHistory[wp] || []).slice(-2, -1)[0])}\n` +
           `What it changed is in .claude/state/runs/${wp}.fix-${attempt - 1}.diff: read it first and do not repeat that approach. ` +
@@ -402,7 +409,7 @@ async function launchWave(wave, wpIds, defectsByWp) {
     const model = last && plan.escalation_model ? plan.escalation_model : null
     const label = defectsByWp ? `${wp} (fix)` : wp
     const agentType = plan.agents[wp] || 'implementer'
-    return report(prompt + IMPLEMENTER_RULES, { agentType, label, schema: REPORT_SCHEMA, model })
+    return report(prompt, { agentType, label, schema: REPORT_SCHEMA, model })
   }))
   const withContext = await withWholeDocument(wpIds, reports, !!defectsByWp)
   wpIds.forEach((wp, i) => {
@@ -425,8 +432,10 @@ async function withWholeDocument(wpIds, reports, fixing) {
     const missing = missingContext(rep)
     if (missing === null) return
     contextGiven.add(wp)
-    const prompt = `Implement ${wp}. Your first attempt returned NEEDS_CONTEXT: ${missing}. This time your brief is architecture.md, whole: read it and implement. If the document does not settle it, return BLOCKED with the section that should.`
-    again.push({ i, run: () => report(prompt + IMPLEMENTER_RULES, { agentType: plan.agents[wp] || 'implementer', label: `${wp} (context)`, schema: REPORT_SCHEMA }) })
+    const prompt = `Implement ${wp}. Your first attempt returned NEEDS_CONTEXT: ${missing}. This time your brief is ` +
+      `architecture.md, whole: read it and implement. The rules you must follow are at the end of ${brief(wp)}. ` +
+      'If the document does not settle it, return BLOCKED with the section that should.'
+    again.push({ i, run: () => report(prompt, { agentType: plan.agents[wp] || 'implementer', label: `${wp} (context)`, schema: REPORT_SCHEMA }) })
   })
   if (!again.length) return reports
   const second = await parallel(again.map(a => a.run))
@@ -454,9 +463,15 @@ async function runWaves(waves, byWave, defectsByWp, opened) {
     const res = await seq([closeCmd, ...(last ? [] : [`open-stage ${waves[i + 1]}`])], `close-stage ${wave}`)
     const close = step(res, 0)
     if (!close) return { stopped: stop(fixing ? `fix wave ${wave}` : `wave ${wave}`, LOST) }
-    const good = ok(close)
+    let good = ok(close)
     run.stages.push({ stage: fixing ? `wave ${wave} (fix)` : `wave ${wave}`, ok: good, check: close && close.output })
     addGateDenials(close.output)
+    let again = false
+    if (!good && !fixing) {
+      const out = await repairAcceptance(wave, byWave[wave], close.output)
+      if (out && out.stopped) return out
+      again = good = !!out
+    }
     if (!good) {
       return { stopped: stop(fixing ? `fix wave ${wave}` : `wave ${wave}`, fixing
         ? 'the fix ended with blockers or writes outside ownership'
@@ -466,9 +481,61 @@ async function runWaves(waves, byWave, defectsByWp, opened) {
       const t = await seq(WAVE_TAIL, 'verify')
       return { post: (t && t.steps) || [] }
     }
+    if (again) { opened = false; continue }  // the failed close carried the next open-stage: it did not run
     if (!ok(step(res, 1))) return { stopped: stop(`wave ${waves[i + 1]}`, 'the stage could not be opened') }
     opened = true
   }
+}
+
+// The packages BLOCKED only by the acceptance tests, sorted; [] unless every other report is done.
+const acceptanceBlocked = (wpIds, reports) => {
+  const blocked = wpIds.filter((wp, i) => reports[i] && reports[i].status === 'BLOCKED' && reports[i].blocker &&
+    typeof reports[i].blocker === 'object' && reports[i].blocker.in === 'acceptance')
+  const done = wpIds.every((wp, i) => blocked.includes(wp) || (reports[i] && DONE_STATUSES.has(reports[i].status)))
+  return blocked.length && done ? [...blocked].sort() : []
+}
+// Whether the budget pays for the repair and the rest of the run, counted as budgetAtStart counts it.
+const fitsRepair = (wave, blocked) => {
+  const most = plan.max_agent_calls
+  if (most === null || most === undefined) return true
+  const later = Object.entries(plan.work_packages).filter(([w]) => Number(w) > Number(wave))
+    .reduce((n, [, ids]) => n + ids.length, 0)
+  return 1 + blocked.length + later + AXES.length + 1 + (plan.docs ? 1 : 0) <= most - run.agent_calls
+}
+const NOT_REPAIRED = 'the test-author could not repair the acceptance tests'
+const WAVE_STOPPED = 'the wave ended with blockers, missing reports or writes outside ownership'
+// A wave blocked only by the acceptance tests, once per run: the test-author repairs them, then the blocked packages
+// run again. null when it does not apply; { stopped } or { ok } otherwise.
+async function repairAcceptance(wave, wpIds, output) {
+  const blocked = acceptanceBlocked(wpIds, wpIds.map(wp => run.work_packages[wp]))
+  const strays = String(output || '').includes('OUTSIDE OWNERSHIP')
+  if (repaired || !blocked.length || strays || !fitsRepair(wave, blocked)) return null
+  repaired = true
+  const where = `wave ${wave}`
+  const open = step(await seqRetry(['open-stage acceptance'], 'open-stage acceptance'), 0)
+  if (!ok(open)) return { stopped: stop(where, 'the acceptance stage could not be reopened to repair the tests') }
+  const blockers = blocked.map(wp => ({ wp, missing: run.work_packages[wp].blocker.missing ?? null }))
+  const at = await report(`Repair the acceptance tests (your brief is ${brief('AT')}). The code of wave ${wave} is ` +
+    'written, and these packages could not finish because the acceptance tests themselves fail, as JSON:\n' +
+    `${JSON.stringify(blockers)}\nFix the tests or their doubles in your zone so that they test what the criteria ` +
+    'say. Do not weaken what a criterion checks and do not touch production code. Run the acceptance command ' +
+    'before you report.',
+  { agentType: 'test-author', label: 'test-author (repair)', schema: AT_SCHEMA })
+  const status = at ? at.status : null
+  const cmd = `close-stage acceptance AT=${status === 'DONE' ? 'done' : 'blocker'}`
+  const close = step(await closeSeq([cmd], 'close-stage acceptance'), 0)
+  run.stages.push({ stage: `acceptance repair (wave ${wave})`, ok: ok(close), check: close && close.output })
+  run.acceptance_repairs.push({ wave, wps: blocked, test_author: status })
+  if (status !== 'DONE' || !ok(close)) return { stopped: stop(where, NOT_REPAIRED) }
+  const reopen = step(await seqRetry([`open-stage ${wave}`], `open-stage ${wave}`), 0)
+  if (!ok(reopen)) return { stopped: stop(where, 'the stage could not be opened') }
+  const { closeCmd } = await launchWave(wave, blocked, null)
+  const again = step(await seq([closeCmd], `close-stage ${wave}`), 0)
+  if (!again) return { stopped: stop(where, LOST) }
+  run.stages.push({ stage: `wave ${wave} (after repair)`, ok: ok(again), check: again.output })
+  addGateDenials(again.output)
+  if (!ok(again)) return { stopped: stop(where, WAVE_STOPPED) }
+  return { ok: true }
 }
 
 // One fix cycle for the given defects (already filtered by the per-package limit). `opened`: the first fix wave is open.
@@ -538,7 +605,6 @@ const rulesIntact = typeof plan.rules_text === 'string' && plan.rules_text !== '
 const RULES = rulesIntact ? plan.rules_text
   : plan.rules && plan.rules.length ? ` Rules you must follow (language and common): ${plan.rules.join(', ')}.` : ''
 run.rules = rulesIntact ? 'printed' : RULES ? 'pointed' : 'none'
-const IMPLEMENTER_RULES = plan.implementer_rules === false ? '' : RULES
 const WAIVERS = Array.isArray(plan.waivers) ? plan.waivers : []
 const REVIEW_SOURCES = { spec: 'reviewer', standards: 'standards-reviewer' }
 // Both reviewers in parallel, one verifier per finding that blocks, the record per axis (never reranked).
@@ -717,7 +783,7 @@ if (startWave === null && plan.acceptance) {
     if (!ok(open)) return stop('wave 0', 'the acceptance stage could not be opened', { gate: open })
     let prompt = `Write the acceptance tests. Your brief is ${brief('AT')}: the parts of architecture.md they need.`
     for (let round = 0; ; round += 1) {
-      const at = await report(prompt + RULES, { agentType: 'test-author', label: round ? 'test-author (revision)' : 'test-author', schema: AT_SCHEMA })
+      const at = await report(prompt, { agentType: 'test-author', label: round ? 'test-author (revision)' : 'test-author', schema: AT_SCHEMA })
       const state = at && at.status === 'DONE' ? 'done' : 'blocker'
       const close = step(await closeSeq([`close-stage acceptance AT=${state} --expect red`], 'close-stage acceptance'), 0)
       run.stages.push({ stage: round ? 'wave 0 (revision)' : 'wave 0', ok: ok(close), test_author: at, check: close && close.output })
